@@ -1,0 +1,14 @@
+[constant]
+rv = 32               | $v_{\rm rad}$
+log_g = 4.5           | log $g$
+
+[free]
+vsini     = 0,40      | $v\sin i$      | uniform
+T0        = 1000,5000 | $T_0$          | uniform
+T1        = 0,4500    | $T_1$          | uniform
+T2        = 0,4000    | $T_2$          | uniform
+T3        = 0,4000    | $T_3$          | uniform
+T4        = 0,4000    | $T_4$          | uniform
+log_H2O   = -12,-1    | log H$_2$O     | uniform
+log_12CO  = -12,-1    | log $^{12}$CO  | uniform
+log_13CO  = -12,-1    | log $^{13}$CO  | uniform
