@@ -28,3 +28,6 @@ print(f"Data directory set to: {DATA_DIR}")
 # Output directory, create one if not exist
 OUTPUT_DIR = PROJECT_ROOT / "output"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+# config directory
+CONFIG_DIR = PROJECT_ROOT / "configs"

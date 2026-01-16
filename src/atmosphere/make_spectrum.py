@@ -144,7 +144,7 @@ class pRT_spectrum:
         )
 
         wl *= 1e7  # cm → nm
-        flux /= np.nanmedian(flux)
+        flux /= np.nanmedian(flux)  # normalize to median flux
 
         # --- Barycentric + RV shift ---
         # Extract RA and Dec values (type checker safety)

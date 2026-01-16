@@ -4,6 +4,7 @@ import pathlib
 import pickle
 import warnings
 import re
+import time
 
 import pymultinest
 
@@ -11,7 +12,6 @@ from retrieval.likelihood import LogLikelihood, Covariance
 from atmosphere.make_spectrum import pRT_spectrum
 from atmosphere import get_species_from_params, setup_radtrans_atmosphere
 from utils.plotting import cornerplot, plot_spectrum, plot_tp_profile
-
 
 from core.paths import OUTPUT_DIR
 
@@ -39,7 +39,7 @@ class Retrieval:
     """
 
     # ===== Initialization =====
-    def __init__(self, parameters, target, N_live_points=200, evidence_tolerance=0.5, output_base=OUTPUT_DIR / "retrievals", lbl_opacity_sampling=3, n_atm_layers=50, wl_pad=7, redo_atmosphere=True):
+    def __init__(self, parameters, target, N_live_points=200, evidence_tolerance=0.5, output_base=OUTPUT_DIR / "retrievals", output_subdir=None, lbl_opacity_sampling=3, n_atm_layers=50, wl_pad=7, redo_atmosphere=True):
         self.parameters = parameters
         self.target = target
     
@@ -48,9 +48,13 @@ class Retrieval:
         self.evidence_tolerance = float(evidence_tolerance)
 
         # Output directory
-        self.output_dir = pathlib.Path(
-            output_base
-        ) / f"N{self.N_live_points}_ev{self.evidence_tolerance}"
+        # If output_subdir is provided, create: output_base / output_subdir / N{...}_ev{...}
+        # Otherwise, create: output_base / N{...}_ev{...}
+        output_base_path = pathlib.Path(output_base)
+        if output_subdir is not None:
+            self.output_dir = output_base_path / output_subdir / f"N{self.N_live_points}_ev{self.evidence_tolerance}"
+        else:
+            self.output_dir = output_base_path / f"N{self.N_live_points}_ev{self.evidence_tolerance}"
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         # Atmosphere configuration
@@ -201,6 +205,10 @@ class Retrieval:
     def PMN_callback(self, n_samples, n_live, n_params, live_points, posterior, stats, max_ln_L, ln_Z, ln_Z_err, nullcontext):
         """
         Live callback during MultiNest run.
+        
+        Note: The posterior passed to this callback is weighted samples in unit cube [0,1].
+        For live plotting, we use weighted samples directly (consistent with original implementation).
+        Final analysis will use equal-weighted posterior for more accurate error bars.
         """
         print(
             f"Callback: {n_samples} samples, "
@@ -208,12 +216,11 @@ class Retrieval:
             f"lnZ = {ln_Z:.2f} ± {ln_Z_err:.2f}"
         )
 
-        # Remove lnL, lnZ columns
-        self.posterior = posterior[:, :-2]
-
-        # Best-fit (use the lnL column from original posterior before removing it)
-        # The last column before lnZ is lnL
-        self.bestfit_params = self.posterior[np.argmax(posterior[:, -2])]
+        # Use weighted posterior directly (same as original implementation)
+        # Note: posterior is in unit cube [0,1], will be converted to physical values in cornerplot()
+        lnL = posterior[:, -2]
+        self.posterior = posterior[:, :-2]  # Remove last 2 columns (lnL and weight)
+        self.bestfit_params = self.posterior[np.argmax(lnL)]
 
         try:
             self.params_dict, self.model_flux = self.get_params_and_spectrum()
@@ -241,6 +248,20 @@ class Retrieval:
             f"\n--- Running retrieval "
             f"(N_live={self.N_live_points}, ev_tol={self.evidence_tolerance}) ---\n"
         )
+        
+        # Print diagnostic information before starting MultiNest
+        try:
+            import psutil
+            import multiprocessing
+            cpu_count = multiprocessing.cpu_count()
+            cpu_percent = psutil.cpu_percent(interval=1)
+            mem = psutil.virtual_memory()
+            print(f"[Diagnostics] CPU cores: {cpu_count}, CPU usage: {cpu_percent:.1f}%, "
+                  f"Memory: {mem.percent:.1f}% used ({mem.available / 1024**3:.1f} GB available)")
+        except ImportError:
+            print("[Diagnostics] psutil not available, skipping system diagnostics")
+        print(f"[Diagnostics] Thread limits: OMP_NUM_THREADS={os.environ.get('OMP_NUM_THREADS', 'not set')}")
+        print(f"[Diagnostics] Starting MultiNest (this may take a moment to initialize)...\n")
 
         pymultinest.run(
             LogLikelihood=self.PMN_lnL,
@@ -401,6 +422,7 @@ class Retrieval:
         """
         Full retrieval pipeline.
         """
+        start_time = time.time()
         self.PMN_run()
         print(f"\n[retrieval.py/Retrieval.run_retrieval] ----- MultiNest run completed. -----\n")
         
@@ -422,6 +444,17 @@ class Retrieval:
         try:
             self.plot_spectrum()
             print(f"[retrieval.py/Retrieval.run_retrieval] plot_spectrum completed.")
+            
+            # ----- save the spectrum to a dat file -----
+            # Ensure all arrays are 1D numpy arrays for column_stack
+            wl = np.asarray(self.target.wl).flatten()
+            fl = np.asarray(self.target.fl).flatten()
+            err = np.asarray(self.target.err).flatten()
+            model_fl = np.asarray(self.model_flux).flatten()
+            residuals = np.asarray(self.target.fl - self.model_flux).flatten()
+            np.savetxt(self.output_dir / f"{self.callback_label}model_spectrum.dat", np.column_stack((wl, fl, err, model_fl, residuals)), header='Wavelength (nm) Data_Flux Data_Err Model_Flux Residuals', fmt='%.6f %.6f %.6f %.6f %.6f')
+            print(f"[retrieval.py/Retrieval.run_retrieval] Model spectrum saved to {self.output_dir / f'{self.callback_label}model_spectrum.dat'}")
+
         except Exception as e:
             print(f"[retrieval.py/Retrieval.run_retrieval] Error in plot_spectrum: {e}")
             import traceback
@@ -437,7 +470,44 @@ class Retrieval:
 
         print("\n--- Retrieval finished ---\n")
 
+        end_time = time.time()
+        print(f"[retrieval.py/Retrieval.run_retrieval] Retrieval finished in {end_time - start_time:.2f} seconds.")
     # ===== Plotting =====
+    def _convert_posterior_to_physical(self, posterior_normalized):
+        """
+        Convert posterior samples from unit cube [0,1] to physical parameter values.
+        
+        Args:
+            posterior_normalized (np.ndarray): Posterior samples in unit cube [0,1], 
+                shape (n_samples, n_params)
+        
+        Returns:
+            np.ndarray: Posterior samples in physical parameter space, 
+                shape (n_samples, n_params)
+        """
+        n_samples = posterior_normalized.shape[0]
+        posterior_physical = np.zeros_like(posterior_normalized)
+        
+        # Save current parameter state to restore later
+        saved_params = self.parameters.params.copy()
+        
+        try:
+            # Convert each sample from unit cube to physical values
+            for i in range(n_samples):
+                # Create a copy of the cube for this sample
+                cube = posterior_normalized[i].copy()
+                # Use Parameters.__call__ to convert to physical values
+                # This updates self.parameters.params, but we only need the conversion
+                self.parameters(cube)
+                # Extract physical values in the order of param_keys
+                for j, key in enumerate(self.parameters.param_keys):
+                    posterior_physical[i, j] = self.parameters.params[key]
+        finally:
+            # Restore original parameter state
+            self.parameters.params = saved_params
+        
+        return posterior_physical
+    
     def cornerplot(self):
         """
         Corner plot of posterior samples.
@@ -446,9 +516,21 @@ class Retrieval:
             print(f"[retrieval.py/Retrieval.cornerplot] Warning: self.posterior is None, skipping corner plot.")
             return
 
+        # Check if we have enough samples for corner plot
+        # corner.corner() requires n_samples >= n_params
+        n_samples, n_params = self.posterior.shape[0], self.posterior.shape[1]
+        if n_samples < n_params:
+            print(f"[retrieval.py/Retrieval.cornerplot] Warning: Not enough samples ({n_samples}) for {n_params} parameters. "
+                  f"Skipping corner plot. Need at least {n_params} samples.")
+            return
+
+        # Convert posterior from unit cube [0,1] to physical parameter values
+        print(f"[retrieval.py/Retrieval.cornerplot] Converting posterior from unit cube to physical values...")
+        posterior_physical = self._convert_posterior_to_physical(self.posterior)
+        
         print(f"[retrieval.py/Retrieval.cornerplot] Creating corner plot, saving to {self.output_dir / f'{self.callback_label}corner.pdf'}")
         cornerplot(
-            posterior=self.posterior,
+            posterior=posterior_physical,
             param_mathtext=self.parameters.param_mathtext,
             color=self.color,
             output_path=self.output_dir,
@@ -474,7 +556,8 @@ class Retrieval:
             color=self.color,
             output_path=self.output_dir,
             callback_label=self.callback_label,
-            title=f"{self.target.name} Spectrum Comparison"
+            title=f"{self.target.name} Spectrum Comparison",
+            residual_flag=True
         )
         print(f"[retrieval.py/Retrieval.plot_spectrum] Spectrum plot saved successfully.")
     
@@ -482,6 +565,8 @@ class Retrieval:
         """
         Plot temperature-pressure (TP) profile.
         """
+        # Determine which model to use (self.model or temp_model)
+        model_to_use = None
         if self.model is None:
             print(f"[retrieval.py/Retrieval.plot_tp_profile] Warning: self.model is None, trying bestfit_params...")
             # Try to get TP profile from bestfit parameters if model not available
@@ -500,15 +585,106 @@ class Retrieval:
                 )
                 temperature = temp_model.temperature
                 pressure = temp_model.pressure
+                model_to_use = temp_model  # Use temp_model for TP profile info
             else:
                 print(f"[retrieval.py/Retrieval.plot_tp_profile] Warning: self.bestfit_params is also None, skipping TP profile plot.")
                 return
         else:
             temperature = self.model.temperature
             pressure = self.model.pressure
+            model_to_use = self.model  # Use self.model for TP profile info
         
         # For live plotting, pass history; for final plotting, don't
         tp_history = self.tp_history if self.callback_label == "live_" else None
+        
+        # Calculate knots error range for final plot
+        knots_temperature = None
+        knots_pressure = None
+        knots_error_positive = None
+        knots_error_negative = None
+        
+        if self.posterior is not None:
+            # Identify TP knot parameters (T_0, T_1, T_2, ... or T0, T1, T2, ...)
+            temp_knot_keys = []
+            for key in self.parameters.param_keys:
+                if (key.startswith('T_') and key[2:].isdigit()) or (key.startswith('T') and key[1:].isdigit() and len(key) > 1):
+                    temp_knot_keys.append(key)
+            
+            if len(temp_knot_keys) > 0:
+                # Convert posterior to physical values
+                posterior_physical = self._convert_posterior_to_physical(self.posterior)
+                
+                # Get indices of temperature knot parameters in param_keys
+                temp_knot_indices = [self.parameters.param_keys.index(key) for key in temp_knot_keys]
+                
+                # Get actual temperature values at knots from the model (for scatter points to match TP profile)
+                # These should match the TP profile line exactly
+                knots_temperature_actual = []
+                for key in temp_knot_keys:
+                    knots_temperature_actual.append(self.parameters.params[key])
+                knots_temperature_actual = np.array(knots_temperature_actual)
+                
+                # Calculate percentiles (16th, 50th, 84th) for each knot (for error bars)
+                knots_error_positive = []
+                knots_error_negative = []
+                
+                for idx in temp_knot_indices:
+                    knot_samples = posterior_physical[:, idx]
+                    median = np.percentile(knot_samples, 50.0)
+                    p16 = np.percentile(knot_samples, 16.0)
+                    p84 = np.percentile(knot_samples, 84.0)
+                    
+                    knots_error_positive.append(p84 - median)
+                    knots_error_negative.append(median - p16)
+                
+                knots_temperature = knots_temperature_actual  # Use actual model values, not median
+                knots_error_positive = np.array(knots_error_positive)
+                knots_error_negative = np.array(knots_error_negative)
+                
+                # Get pressure knots from TP profile
+                # Try to get log_P_knots from the TP profile object (use model_to_use instead of self.model)
+                if model_to_use is not None and hasattr(model_to_use, 'tp_profile') and hasattr(model_to_use.tp_profile, 'log_P_knots'):
+                    log_P_knots = model_to_use.tp_profile.log_P_knots
+                    if log_P_knots is not None:
+                        knots_pressure = 10**np.array(log_P_knots)
+                    else:
+                        # If log_P_knots is None, create equally-spaced knots
+                        knots_pressure = np.logspace(
+                            np.log10(pressure.min()),
+                            np.log10(pressure.max()),
+                            num=len(knots_temperature)
+                        )
+                else:
+                    # Fallback: create equally-spaced knots
+                    knots_pressure = np.logspace(
+                        np.log10(pressure.min()),
+                        np.log10(pressure.max()),
+                        num=len(knots_temperature)
+                    )
+                
+                # Ensure knots are sorted by pressure (ascending: low pressure to high pressure)
+                knots_temperature = knots_temperature[::-1]
+                knots_error_positive = knots_error_positive[::-1]
+                knots_error_negative = knots_error_negative[::-1]
+                # Now sort by pressure (ascending)
+                sort_idx = np.argsort(knots_pressure)
+                knots_pressure = knots_pressure[sort_idx]
+                knots_temperature = knots_temperature[sort_idx]
+                knots_error_positive = knots_error_positive[sort_idx]
+                knots_error_negative = knots_error_negative[sort_idx]
+                
+                print(f"[retrieval.py/Retrieval.plot_tp_profile] Found {len(temp_knot_keys)} TP knots: {temp_knot_keys}")
+                print(f"[retrieval.py/Retrieval.plot_tp_profile] knots_temperature shape: {knots_temperature.shape}, knots_pressure shape: {knots_pressure.shape}")
+                print(f"[retrieval.py/Retrieval.plot_tp_profile] knots_error_positive shape: {knots_error_positive.shape}, knots_error_negative shape: {knots_error_negative.shape}")
+            else:
+                print(f"[retrieval.py/Retrieval.plot_tp_profile] Warning: No TP knot parameters found in param_keys.")
+        else:
+            print(f"[retrieval.py/Retrieval.plot_tp_profile] Warning: self.posterior is None, cannot calculate knots error range.")
+        
+        # Get interpolation mode from TP profile (for consistent interpolation in plotting)
+        interp_mode = 'cubic'  # default
+        if model_to_use is not None and hasattr(model_to_use, 'tp_profile') and hasattr(model_to_use.tp_profile, 'interp_mode'):
+            interp_mode = model_to_use.tp_profile.interp_mode
         
         print(f"[retrieval.py/Retrieval.plot_tp_profile] Creating TP profile plot, saving to {self.output_dir / f'{self.callback_label}tp_profile.pdf'}")
         plot_tp_profile(
@@ -518,7 +694,12 @@ class Retrieval:
             output_path=self.output_dir,
             callback_label=self.callback_label,
             title=f"{self.target.name} TP Profile",
-            tp_history=tp_history
+            tp_history=tp_history,
+            knots_temperature=knots_temperature,
+            knots_pressure=knots_pressure,
+            knots_error_positive=knots_error_positive,
+            knots_error_negative=knots_error_negative,
+            interp_mode=interp_mode
         )
         print(f"[retrieval.py/Retrieval.plot_tp_profile] TP profile plot saved successfully.")
     

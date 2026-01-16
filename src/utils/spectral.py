@@ -87,15 +87,48 @@ def instr_broadening(wave, flux, out_res=1e6, in_res=1e6):
     if isinstance(wave, u.Quantity):
         wave = wave.to(u.Unit("nm")).value
     
+    # Check if out_res >= in_res (cannot broaden to higher resolution)
+    if out_res >= in_res:
+        import warnings
+        warnings.warn(
+            f"out_res ({out_res}) >= in_res ({in_res}). "
+            "Cannot broaden to higher resolution. Returning original flux.",
+            UserWarning
+        )
+        return flux.copy()
+    
     # Compute additional broadening needed
     # Delta lambda of resolution element is FWHM of the LSF's standard deviation
-    sigma_LSF = np.sqrt(1.0 / out_res**2 - 1.0 / in_res**2) / (2.0 * np.sqrt(2.0 * np.log(2.0)))
+    # Using error propagation: 1/R_out² = 1/R_in² + 1/R_add²
+    diff = 1.0 / out_res**2 - 1.0 / in_res**2
+    if diff <= 0:
+        import warnings
+        warnings.warn(
+            f"Cannot compute broadening: 1/out_res² - 1/in_res² = {diff:.2e} <= 0. "
+            "Returning original flux.",
+            UserWarning
+        )
+        return flux.copy()
+    
+    sigma_LSF = np.sqrt(diff) / (2.0 * np.sqrt(2.0 * np.log(2.0)))
     
     # Compute wavelength spacing (log-spaced grid)
+    # This formula works for both linear and log-spaced grids
     spacing = np.mean(2.0 * np.diff(wave) / (wave[1:] + wave[:-1]))
     
     # Calculate the sigma to be used in the gauss filter in pixels
     sigma_LSF_gauss_filter = sigma_LSF / spacing
+    
+    # Check if sigma is too small to have any effect
+    if sigma_LSF_gauss_filter < 0.1:
+        import warnings
+        warnings.warn(
+            f"sigma_LSF_gauss_filter ({sigma_LSF_gauss_filter:.6f} pixels) is too small. "
+            f"Gaussian filter will have negligible effect. "
+            f"out_res={out_res:.0f}, in_res={in_res:.0f}. "
+            "Consider using a larger resolution difference.",
+            UserWarning
+        )
     
     # Apply gaussian filter to broaden with the spectral resolution
     flux_LSF = gaussian_filter(flux, sigma=sigma_LSF_gauss_filter, mode='nearest')
