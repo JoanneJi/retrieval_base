@@ -1,6 +1,5 @@
 from typing import Any
 
-
 import numpy as np
 import warnings
 
@@ -28,17 +27,29 @@ class pRT_spectrum:
     """
 
     def __init__(self, parameters, target, atmosphere, spectral_resolution=100_000, 
-                 lbl_opacity_sampling=3, contribution=False, debug=False):
+                 lbl_opacity_sampling=3, normalize=True, contribution=False, debug=False):
         self.parameters = parameters
         self.params = parameters.params  # shorthand
         self.target = target
         self.atmosphere = atmosphere
 
-        self.data_wave = target.wl.flatten()
+        # Handle both chips_mode and single spectrum mode
+        if target.chips_mode:
+            # Multi-chip mode: data_wave is a list of arrays
+            self.data_wave = target.wl  # list of arrays
+            self.chips_mode = True
+            self.n_chips = target.n_chips
+        else:
+            # Single spectrum mode (backward compatible)
+            self.data_wave = target.wl.flatten() if hasattr(target.wl, 'flatten') else target.wl
+            self.chips_mode = False
+            self.n_chips = 1
+        
         self.coords = SkyCoord(ra=target.ra, dec=target.dec, frame="icrs")
 
         self.spectral_resolution = spectral_resolution
         self.lbl_opacity_sampling = lbl_opacity_sampling
+        self.normalize = normalize
         self.contribution = contribution
         self.debug = debug
 
@@ -133,6 +144,15 @@ class pRT_spectrum:
 
     # ========== Spectrum synthesis ==========
     def make_spectrum(self):
+        if self.chips_mode:
+            # Multi-chip mode: process each chip separately
+            return self._make_spectrum_chips()
+        else:
+            # Single spectrum mode (original behavior, backward compatible)
+            return self._make_spectrum_single()
+    
+    def _make_spectrum_single(self):
+        """Original single spectrum processing (backward compatible)."""
         # --- pRT forward model, which returns a pRT atmosphere object ---
         wl, flux, _ = self.atmosphere.calculate_flux(  # in cm
             temperatures=self.temperature,
@@ -144,7 +164,9 @@ class pRT_spectrum:
         )
 
         wl *= 1e7  # cm → nm
-        flux /= np.nanmedian(flux)  # normalize to median flux
+
+        if self.normalize:
+            flux /= np.nanmedian(flux)  # normalize to median flux
 
         # --- Barycentric + RV shift ---
         # Extract RA and Dec values (type checker safety)
@@ -191,4 +213,92 @@ class pRT_spectrum:
         # --- Interpolate to data grid ---
         model_flux = np.interp(self.data_wave, waves_even, flux)
 
+        return model_flux
+    
+    def _make_spectrum_chips(self):
+        """Multi-chip spectrum processing: use single Radtrans object, extract each chip."""
+        # Optimized mode: single Radtrans object covering all chips
+        # Calculate full spectrum once, then extract each chip's range
+        
+        # Get wave_ranges_chips from atmosphere object (stored during setup)
+        wave_ranges_chips = getattr(self.atmosphere, 'wave_ranges_chips', None)
+        wl_pad = getattr(self.atmosphere, 'wl_pad', 7)
+        
+        if wave_ranges_chips is None:
+            # Fallback: estimate from data_wave
+            wave_ranges_chips = np.array([[w.min(), w.max()] for w in self.data_wave])
+        
+        # --- Barycentric correction (same for all chips) ---
+        ra_value = self.coords.ra.value if self.coords.ra is not None else 0.0
+        dec_value = self.coords.dec.value if self.coords.dec is not None else 0.0
+        v_bary, _ = helcorr(
+            obs_long=-70.40,
+            obs_lat=-24.62,
+            obs_alt=2635,
+            ra2000=ra_value,
+            dec2000=dec_value,
+            jd=self.target.JD,
+        )
+        
+        # --- Calculate full spectrum once (covering all chips) ---
+        wl_full, flux_full, _ = self.atmosphere.calculate_flux(  # in cm
+            temperatures=self.temperature,
+            mass_fractions=self.mass_fractions,
+            reference_gravity=self.gravity,
+            mean_molar_masses=self.MMW,
+            return_contribution=self.contribution,
+            frequencies_to_wavelengths=True,
+        )
+        
+        wl_full *= 1e7  # cm → nm
+        
+        # --- Process each chip separately to avoid processing gap regions ---
+        model_flux_chips = []
+
+        for i, data_wave_i in enumerate(self.data_wave):
+            # Get wavelength range for this chip (with padding for extraction)
+            wlmin_chip = wave_ranges_chips[i, 0] - wl_pad
+            wlmax_chip = wave_ranges_chips[i, 1] + wl_pad
+            
+            # Extract the relevant portion from full spectrum (only chip region, skip gaps)
+            mask_chip = (wl_full >= wlmin_chip) & (wl_full <= wlmax_chip)
+            wl_chip = wl_full[mask_chip]
+            flux_chip = flux_full[mask_chip]
+            
+            # --- Normalize this chip ---
+            if self.normalize:
+                flux_chip /= np.nanmedian(flux_chip)  # normalize to median flux of this chip
+            
+            # --- Barycentric + RV shift (apply to this chip) ---
+            wl_shifted_chip = wl_chip * (1 + (self.params["rv"] - v_bary) / getattr(const, 'c').to("km/s").value)
+            
+            # --- Regrid, evenly spaced (this chip only) ---
+            waves_even_chip = np.linspace(wl_chip.min(), wl_chip.max(), wl_chip.size)
+            flux_chip = np.interp(waves_even_chip, wl_shifted_chip, flux_chip)
+            
+            # --- Rotation (this chip only) ---
+            flux_chip = fastRotBroad(waves_even_chip, flux_chip, 0.5, self.params["vsini"])
+            
+            # --- Instrumental broadening (double convolution, this chip only) ---
+            # Step 1: Convolve to spectral_resolution
+            flux_chip = convolve_to_resolution(
+                waves_even_chip, flux_chip, out_res=self.spectral_resolution
+            )
+            
+            # Step 2: Additional broadening
+            resolution = int(1e6 / self.lbl_opacity_sampling)
+            intermediate_resolution = int(1e6 / max(1, self.lbl_opacity_sampling - 1))
+            flux_chip = instr_broadening(
+                waves_even_chip, flux_chip,
+                out_res=resolution,
+                in_res=intermediate_resolution
+            )
+            
+            # --- Interpolate to data grid for this chip ---
+            model_flux_chip = np.interp(data_wave_i, waves_even_chip, flux_chip)
+            model_flux_chips.append(model_flux_chip)
+        
+        # Concatenate all chips into a single array
+        model_flux = np.concatenate(model_flux_chips)
+        
         return model_flux

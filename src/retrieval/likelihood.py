@@ -36,7 +36,7 @@ class LogLikelihood:
             self.cov = covariance if covariance is not None else Covariance(err=retrieval_object.data_err[self.d_mask])
         elif target is not None:
             # New interface: target and covariance
-            self.d_flux = target.fl
+            self.d_flux = target.fl_flat
             self.d_mask = target.mask
             self.N_params = None  # Will be set later if needed
             self.cov = covariance

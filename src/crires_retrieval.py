@@ -27,7 +27,11 @@ Refactored by: Chenyang Ji (2025-12-22)
 """
 
 # crires_retrieval.py
-from core.paths import setup_prt_path, SRC_DIR
+# Set thread limits BEFORE importing numpy or other libraries that use threading
+# from utils.system import setup_thread_limits
+# setup_thread_limits()
+
+from core.paths import setup_prt_path, CONFIG_DIR
 from retrieval.parameters import Parameters
 from data.loaders import load_crires_dat
 from data.preprocessing import select_order_and_flatten
@@ -39,6 +43,7 @@ def main():
     """Main function to run the retrieval with CRIRES+ data."""
     # 1. set up pRT input data path
     setup_prt_path()
+    prefix_crires = "whole"
 
     # 2. load CRIRES+ spectrum
     wave, flux, err = load_crires_dat(  # micron -> nm
@@ -53,10 +58,19 @@ def main():
     # 3. select order and detector, flatten to 1D
     wave_norm, flux_norm, err_norm = select_order_and_flatten(
         wave, flux, err,
-        orders=[5],
-        dets=[0],
-        normalize=True
+        orders=[5,6],
+        dets=[0,1,2],
+        normalize=False
     )
+
+    # # plot the spectrum for debugging
+    # import matplotlib.pyplot as plt
+    # plt.figure(figsize=(12, 5))
+    # plt.errorbar(wave_norm, flux_norm, yerr=err_norm, linewidth=0.5, label="Flux")
+    # plt.xlabel("Wavelength [nm]")
+    # plt.ylabel("Flux")
+    # plt.ylim(0, 10)
+    # plt.savefig(f"CD-35_2722_spectrum_{prefix_crires}.pdf")
 
     # 4. Create target object
     target = Target(
@@ -66,13 +80,15 @@ def main():
     )
 
     # 5. load parameters & run retrieval
-    parameters = Parameters(config_file=SRC_DIR / "config" / "config_example.py", debug=False)
+    parameters = Parameters(config_file=CONFIG_DIR / "CD-35_2722" / "2022-12-31" / "config_example.py", debug=False)
 
     retrieval = Retrieval(
         parameters=parameters,
         target=target,
         N_live_points=200,
-        evidence_tolerance=0.5
+        evidence_tolerance=0.5,
+        output_subdir=f"CD-35_2722/2022-12-31/starA/{prefix_crires}",  # Output to output/retrievals/{output_subdir}/N{...}_ev{...}/
+        normalize=False
     )
 
     retrieval.run_retrieval()

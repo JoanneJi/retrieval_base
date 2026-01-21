@@ -39,10 +39,11 @@ class Retrieval:
     """
 
     # ===== Initialization =====
-    def __init__(self, parameters, target, N_live_points=200, evidence_tolerance=0.5, output_base=OUTPUT_DIR / "retrievals", output_subdir=None, lbl_opacity_sampling=3, n_atm_layers=50, wl_pad=7, redo_atmosphere=True):
+    def __init__(self, parameters, target, N_live_points=200, evidence_tolerance=0.5, output_base=OUTPUT_DIR / "retrievals", output_subdir=None, lbl_opacity_sampling=3, n_atm_layers=50, wl_pad=7, redo_atmosphere=True, normalize=True):
         self.parameters = parameters
         self.target = target
-    
+        self.normalize = normalize
+        
         # Sampler configuration
         self.N_live_points = int(N_live_points)
         self.evidence_tolerance = float(evidence_tolerance)
@@ -75,18 +76,36 @@ class Retrieval:
         self.species = get_species_from_params(param_dict=all_param_keys, species_info_path=species_info_path)
 
         # Create atmosphere objects
-        self.atmosphere = setup_radtrans_atmosphere(
-            species=self.species,
-            target_wavelengths=self.target.wl,
-            pressure=self.pressure,
-            lbl_opacity_sampling=self.lbl_opacity_sampling,
-            wl_pad=self.wl_pad,
-            cache_file=self.output_dir / "atmosphere_objects.pickle",
-            redo=redo_atmosphere
-        )
+        # Check if target is in chips_mode
+        chips_mode = getattr(self.target, 'chips_mode', False)
+        if chips_mode:
+            # Multi-chip mode: pass wave_ranges_chips
+            self.atmosphere = setup_radtrans_atmosphere(
+                species=self.species,
+                target_wavelengths=self.target.wl,  # list of arrays
+                pressure=self.pressure,
+                lbl_opacity_sampling=self.lbl_opacity_sampling,
+                wl_pad=self.wl_pad,
+                cache_file=self.output_dir / "atmosphere_objects.pickle",
+                redo=redo_atmosphere,
+                chips_mode=True,
+                wave_ranges_chips=self.target.wave_ranges_chips
+            )
+        else:
+            # Single spectrum mode (backward compatible)
+            self.atmosphere = setup_radtrans_atmosphere(
+                species=self.species,
+                target_wavelengths=self.target.wl,
+                pressure=self.pressure,
+                lbl_opacity_sampling=self.lbl_opacity_sampling,
+                wl_pad=self.wl_pad,
+                cache_file=self.output_dir / "atmosphere_objects.pickle",
+                redo=redo_atmosphere
+            )
 
         # Likelihood components
-        self.cov = Covariance(err=self.target.err[self.target.mask])
+        # Use err_flat which is always available (1D array in both chips_mode and non-chips_mode)
+        self.cov = Covariance(err=self.target.err_flat[self.target.mask])
         self.loglike = LogLikelihood(
             target=self.target,
             covariance=self.cov,
@@ -161,6 +180,7 @@ class Retrieval:
                 target=self.target,
                 atmosphere=self.atmosphere,
                 lbl_opacity_sampling=self.lbl_opacity_sampling,
+                normalize=self.normalize,
             )
             model_flux = model.make_spectrum()
 
@@ -275,7 +295,7 @@ class Retrieval:
             const_efficiency_mode=True,
             sampling_efficiency=0.5,
             dump_callback=self.PMN_callback,
-            n_iter_before_update=10,  # call back every 10 iterations
+            n_iter_before_update=20,  # call back every 25 iterations
         )
 
     # ----- Post-MultiNest analysis -----
@@ -418,12 +438,16 @@ class Retrieval:
         return self.params_dict, self.model_flux
 
     # ===== Full retrieval =====
-    def run_retrieval(self):
+    def run_retrieval(self, resume=True):
         """
         Full retrieval pipeline.
+        
+        Args:
+            resume (bool): If True, resume from previous run. If False, start fresh.
+                          Default: True
         """
         start_time = time.time()
-        self.PMN_run()
+        self.PMN_run(resume=resume)
         print(f"\n[retrieval.py/Retrieval.run_retrieval] ----- MultiNest run completed. -----\n")
         
         self.analyse()
@@ -446,12 +470,12 @@ class Retrieval:
             print(f"[retrieval.py/Retrieval.run_retrieval] plot_spectrum completed.")
             
             # ----- save the spectrum to a dat file -----
-            # Ensure all arrays are 1D numpy arrays for column_stack
-            wl = np.asarray(self.target.wl).flatten()
-            fl = np.asarray(self.target.fl).flatten()
-            err = np.asarray(self.target.err).flatten()
+            # Use *_flat arrays which are always available (1D arrays in both chips_mode and non-chips_mode)
+            wl = self.target.wl_flat
+            fl = self.target.fl_flat
+            err = self.target.err_flat
             model_fl = np.asarray(self.model_flux).flatten()
-            residuals = np.asarray(self.target.fl - self.model_flux).flatten()
+            residuals = np.asarray(fl - model_fl).flatten()
             np.savetxt(self.output_dir / f"{self.callback_label}model_spectrum.dat", np.column_stack((wl, fl, err, model_fl, residuals)), header='Wavelength (nm) Data_Flux Data_Err Model_Flux Residuals', fmt='%.6f %.6f %.6f %.6f %.6f')
             print(f"[retrieval.py/Retrieval.run_retrieval] Model spectrum saved to {self.output_dir / f'{self.callback_label}model_spectrum.dat'}")
 
@@ -547,16 +571,17 @@ class Retrieval:
             return
         
         print(f"[retrieval.py/Retrieval.plot_spectrum] Creating spectrum plot, saving to {self.output_dir / f'{self.callback_label}spectrum.pdf'}")
+        # Use *_flat arrays which are always available (1D arrays in both chips_mode and non-chips_mode)
         plot_spectrum(
-            data_wave=self.target.wl,
-            data_flux=self.target.fl,
+            data_wave=self.target.wl_flat,
+            data_flux=self.target.fl_flat,
             model_flux=self.model_flux,
-            data_err=self.target.err,
+            data_err=self.target.err_flat,
             mask=self.target.mask,
             color=self.color,
             output_path=self.output_dir,
             callback_label=self.callback_label,
-            title=f"{self.target.name} Spectrum Comparison",
+            # title=f"{self.target.name} Spectrum Comparison",
             residual_flag=True
         )
         print(f"[retrieval.py/Retrieval.plot_spectrum] Spectrum plot saved successfully.")
