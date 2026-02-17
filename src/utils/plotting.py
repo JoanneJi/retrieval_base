@@ -155,44 +155,23 @@ def plot_spectrum(
         data_err = data_err[sort_idx]
     
     # Detect wavelength gaps to determine subplot structure
-    # Gap threshold: if gap > (length of previous segment + length of next segment), create new subplot
+    # Use a simpler approach: if gap is significantly larger than median gap, create new subplot
     gaps = np.diff(data_wave)
     segment_starts = [0]  # Start indices of each continuous segment
     
     if len(gaps) > 0:
-        i = 0
-        while i < len(gaps):
+        # Calculate median gap (typical spacing between adjacent points)
+        median_gap = np.median(gaps[gaps > 0])  # Only consider positive gaps
+        
+        # Use a threshold: gap > 10x median gap (or absolute threshold of 1 nm, whichever is larger)
+        # This ensures we catch large gaps even if median gap is very small
+        gap_threshold = max(10 * median_gap, 10.0)  # At least 10 nm gap required
+        
+        for i in range(len(gaps)):
             gap = gaps[i]
-            if gap <= 0:
-                i += 1
-                continue
-            
-            # Current segment start
-            seg_start = segment_starts[-1]
-            # Length of previous segment (from segment start to current position)
-            prev_seg_length = data_wave[i] - data_wave[seg_start]
-            
-            # Find next significant gap to estimate next segment length
-            next_seg_length = 0
-            if i + 1 < len(data_wave):
-                # Look ahead to find next gap or end
-                for j in range(i + 1, len(gaps)):
-                    if gaps[j] > np.median(gaps) * 2:  # Next significant gap
-                        next_seg_length = data_wave[j] - data_wave[i + 1]
-                        break
-                else:
-                    # No more gaps, use remaining data as next segment
-                    next_seg_length = data_wave[-1] - data_wave[i + 1]
-            
-            # If gap is larger than sum of adjacent segment lengths, create new subplot
-            if prev_seg_length > 0 and next_seg_length > 0:
-                if gap > (prev_seg_length + next_seg_length):
-                    segment_starts.append(i + 1)
-            elif prev_seg_length > 0 and gap > prev_seg_length * 2:
-                # Fallback: if gap is more than 2x previous segment length
+            if gap > gap_threshold:
+                # This is a significant gap, create new subplot
                 segment_starts.append(i + 1)
-            
-            i += 1
     
     segment_ends = segment_starts[1:] + [len(data_wave)]
     
@@ -215,8 +194,15 @@ def plot_spectrum(
         padding = flux_range * 0.02
         ylim_upper = (flux_min - padding, flux_max + padding)
         
-        # Lower part: residual range (around -0.1 to 0.1)
-        ylim_lower = (-0.15, 0.15)
+        # Calculate global residual range for lower axis
+        # Calculate residuals for all segments first
+        all_residuals = data_flux - model_flux
+        residual_min = np.nanmin(all_residuals)
+        residual_max = np.nanmax(all_residuals)
+        residual_range = residual_max - residual_min
+        # Expand by 0.02 (2% of range) on each side
+        residual_padding = residual_range * 0.02
+        ylim_lower = (residual_min - residual_padding, residual_max + residual_padding)
         
         # Create figure
         fig = plt.figure(figsize=(figsize[0], figsize[1] * n_subplots), dpi=dpi)
@@ -356,32 +342,36 @@ def plot_spectrum(
             ax_lower.set_xlim(xlim_seg)
             
             # Add broken axis marks (parallel diagonal lines)
+            # To ensure parallel lines, use the same relative height (as fraction of y-axis range)
+            # for both upper and lower axes, so they appear at the same angle
+            
             # Line length as fraction of x-axis range
-            line_length_frac = 0.005  # 1.5% of x-axis range
+            line_length_frac = 0.005  # 0.5% of x-axis range
             line_length = (xlim_seg[1] - xlim_seg[0]) * line_length_frac
             
-            # To ensure parallel lines, use the same absolute height for both axes
-            y_range_upper = ylim_upper[1] - ylim_upper[0]
-            line_height_frac = 0.025  # 2% of reference y-axis range
-            line_height = y_range_upper * line_height_frac
-
-            line_height_upper = line_height
-            line_height_lower = line_height
+            # Use the same relative height fraction for both axes to ensure parallel appearance
+            line_height_frac = 0.025  # 2.5% of each axis's y-range
             
-            # Left diagonal: from bottom-left to top-right
+            # Calculate line heights relative to each axis's range
+            y_range_upper = ylim_upper[1] - ylim_upper[0]
+            y_range_lower = ylim_lower[1] - ylim_lower[0]
+            line_height_upper = y_range_upper * line_height_frac
+            line_height_lower = y_range_lower * line_height_frac
+            
+            # Upper axis: left diagonal (from bottom-left to top-right)
             ax_upper.plot([xlim_seg[0] - line_length, xlim_seg[0] + line_length], 
                          [ylim_upper[0] - line_height_upper, ylim_upper[0] + line_height_upper], 
                          'k-', linewidth=1.5, clip_on=False, zorder=10)
-            # Right diagonal: from bottom-right to top-left
+            # Upper axis: right diagonal (from bottom-right to top-left)
             ax_upper.plot([xlim_seg[1] - line_length, xlim_seg[1] + line_length], 
                          [ylim_upper[0] - line_height_upper, ylim_upper[0] + line_height_upper], 
                          'k-', linewidth=1.5, clip_on=False, zorder=10)
 
-            # Left diagonal: from top-left to bottom-right
+            # Lower axis: left diagonal (from top-left to bottom-right)
             ax_lower.plot([xlim_seg[0] - line_length, xlim_seg[0] + line_length], 
                          [ylim_lower[1] - line_height_lower, ylim_lower[1] + line_height_lower], 
                          'k-', linewidth=1.5, clip_on=False, zorder=10)
-            # Right diagonal: from top-right to bottom-left
+            # Lower axis: right diagonal (from top-right to bottom-left)
             ax_lower.plot([xlim_seg[1] - line_length, xlim_seg[1] + line_length], 
                          [ylim_lower[1] - line_height_lower, ylim_lower[1] + line_height_lower], 
                          'k-', linewidth=1.5, clip_on=False, zorder=10)
@@ -756,3 +746,162 @@ def plot_tp_profile(
     plt.close(fig)
     return fig
 
+
+def plot_vmr_profile(
+    vmrs_dict,
+    pressure,
+    output_path=None,
+    callback_label="",
+    title=None,
+    figsize=(6, 5),
+    dpi=200,
+    vmr_error_dict=None,
+    species_colors=None,
+    color=None  # Unused, kept for compatibility
+):
+    """
+    Plot volume mixing ratio (VMR) profiles as a function of pressure.
+    
+    Args:
+        vmrs_dict (dict): Dictionary mapping species names to VMR arrays [dimensionless]
+        pressure (np.ndarray): Pressure array [bar]
+        output_path (pathlib.Path, optional): Path to save the plot
+        callback_label (str): Label prefix for output filename (e.g., "live_", "final_")
+        title (str, optional): Plot title
+        figsize (tuple): Figure size (width, height). Default: (6, 5)
+        dpi (int): Figure resolution. Default: 200
+        vmr_error_dict (dict, optional): Dictionary mapping species names to error arrays.
+            Each error array should have shape (n_layers, 2) where columns are [lower, upper] errors.
+            Or shape (n_layers,) for symmetric errors. Default: None
+        species_colors (dict, optional): Dictionary mapping species names to colors.
+            If None, uses default color cycle. Default: None
+        color (str, optional): Unused parameter, kept for compatibility. Default: None
+    
+    Returns:
+        matplotlib.figure.Figure: The figure object
+    """
+    # Validate inputs
+    if vmrs_dict is None or len(vmrs_dict) == 0:
+        warnings.warn("VMRs dictionary is empty, cannot create VMR profile plot.")
+        return None
+    
+    if pressure is None:
+        warnings.warn("Pressure is None, cannot create VMR profile plot.")
+        return None
+    
+    # Check that all VMR arrays have the same length as pressure
+    n_layers = len(pressure)
+    for species, vmr in vmrs_dict.items():
+        if len(vmr) != n_layers:
+            raise ValueError(f"VMR array for {species} has wrong length: {len(vmr)} vs {n_layers}.")
+    
+    # Create figure
+    fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
+    
+    # Default color cycle (use matplotlib's default)
+    default_colors = plt.cm.tab10(np.linspace(0, 1, 10))
+    
+    # Filter out H2 and He from plotting (they're usually dominant and less interesting)
+    species_to_plot = [s for s in vmrs_dict.keys() if s not in ['H2', 'He', 'MMW']]
+    
+    if len(species_to_plot) == 0:
+        warnings.warn("No species to plot (excluding H2, He, MMW).")
+        plt.close(fig)
+        return None
+    
+    # Plot each species
+    for idx, species in enumerate(species_to_plot):
+        vmr = vmrs_dict[species]
+        
+        # Get color for this species
+        if species_colors is not None and species in species_colors:
+            color_species = species_colors[species]
+        else:
+            color_species = default_colors[idx % len(default_colors)]
+        
+        # Plot error range if provided
+        if vmr_error_dict is not None and species in vmr_error_dict:
+            errors = vmr_error_dict[species]
+            if errors.ndim == 2 and errors.shape[1] == 2:
+                # Asymmetric errors: [lower, upper]
+                vmr_lower = vmr - errors[:, 0]
+                vmr_upper = vmr + errors[:, 1]
+            elif errors.ndim == 1:
+                # Symmetric errors
+                vmr_lower = vmr - errors
+                vmr_upper = vmr + errors
+            else:
+                warnings.warn(f"Invalid error shape for {species}: {errors.shape}. Skipping error range.")
+                vmr_lower = None
+                vmr_upper = None
+            
+            if vmr_lower is not None and vmr_upper is not None:
+                # Fill between for error range
+                ax.fill_betweenx(
+                    pressure,
+                    vmr_lower,
+                    vmr_upper,
+                    color=color_species,
+                    edgecolor='none',
+                    alpha=0.2,
+                    zorder=0
+                )
+        
+        # Plot VMR profile line
+        ax.plot(
+            vmr,
+            pressure,
+            color=color_species,
+            linewidth=2.0,
+            label=species,
+            zorder=2
+        )
+    
+    # Apply style to axes (same as TP profile)
+    # Set border linewidth to 2.0
+    for spine in ax.spines.values():
+        spine.set_linewidth(2.0)
+    # Set major ticks to point inward
+    ax.tick_params(axis='both', which='major', direction='in', 
+                   length=6, width=1.5, labelsize=10)
+    ax.tick_params(axis='both', which='minor', direction='in', 
+                   length=3, width=1)
+    
+    # Set labels with bold font
+    ax.set_xlabel('Volume Mixing Ratio', fontsize=12, weight='bold')
+    ax.set_ylabel('Pressure [bar]', fontsize=12, weight='bold')
+    
+    # Set title
+    if title is not None:
+        ax.set_title(title, fontsize=14, weight='bold')
+    elif callback_label:
+        ax.set_title(f'VMR Profile ({callback_label.rstrip("_")})', fontsize=14, weight='bold')
+    else:
+        ax.set_title('VMR Profile', fontsize=14, weight='bold')
+    
+    # Set y-axis to log scale and invert (pressure: small at top, large at bottom)
+    ax.set_yscale('log')
+    ax.invert_yaxis()
+    
+    # Set x-axis to log scale (VMR typically spans many orders of magnitude)
+    ax.set_xscale('log')
+    
+    # Add grid (same style as TP profile)
+    ax.grid(True, linestyle='--', linewidth=1, zorder=0, alpha=0.3, which='both')
+    
+    # Add legend (no border, best location)
+    ax.legend(loc='best', fontsize=10, ncol=1, frameon=False, columnspacing=0.2, 
+              handlelength=1.0, handletextpad=0.4, markerscale=0.8)
+    
+    plt.tight_layout()
+    
+    # Save if output path provided
+    if output_path is not None:
+        fig.savefig(
+            output_path / f"{callback_label}vmr_profile.pdf",
+            bbox_inches="tight",
+            dpi=dpi
+        )
+    
+    plt.close(fig)
+    return fig

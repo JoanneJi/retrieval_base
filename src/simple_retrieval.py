@@ -70,7 +70,7 @@ def main():
         target=target,
         N_live_points=200,
         evidence_tolerance=0.5,
-        output_subdir=f'{order_detector}_simple'  # Output to output/retrievals/{output_subdir}/N{...}_ev{...}/
+        output_subdir=f'simple/{order_detector}_simple'  # Output to output/retrievals/{output_subdir}/N{...}_ev{...}/
     )
 
     retrieval.run_retrieval()

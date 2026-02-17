@@ -11,6 +11,12 @@ import numpy as np
 
 # ========== Priors ==========
 
+# ---------- Sampling options (optional) ----------
+# inverse_flag: If True (default), temperature knots are sampled from prior only.
+#   If False, sampling enforces T_4 < T_3 < T_2 < T_1 < T_0 (monotonic TP with altitude).
+# Omit this variable to use the default (True) or the value passed to Parameters().
+# inverse_flag = True
+
 # ---------- Constant parameters ----------
 constant_params = {
     # ----- radial velocity and surface gravity -----

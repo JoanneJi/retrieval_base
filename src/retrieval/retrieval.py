@@ -11,7 +11,7 @@ import pymultinest
 from retrieval.likelihood import LogLikelihood, Covariance
 from atmosphere.make_spectrum import pRT_spectrum
 from atmosphere import get_species_from_params, setup_radtrans_atmosphere
-from utils.plotting import cornerplot, plot_spectrum, plot_tp_profile
+from utils.plotting import cornerplot, plot_spectrum, plot_tp_profile, plot_vmr_profile
 
 from core.paths import OUTPUT_DIR
 
@@ -39,10 +39,11 @@ class Retrieval:
     """
 
     # ===== Initialization =====
-    def __init__(self, parameters, target, N_live_points=200, evidence_tolerance=0.5, output_base=OUTPUT_DIR / "retrievals", output_subdir=None, lbl_opacity_sampling=3, n_atm_layers=50, wl_pad=7, redo_atmosphere=True, normalize=True):
+    def __init__(self, parameters, target, N_live_points=200, evidence_tolerance=0.5, output_base=OUTPUT_DIR / "retrievals", output_subdir=None, lbl_opacity_sampling=3, n_atm_layers=50, wl_pad=7, redo_atmosphere=True, normalize=True, normalize_method='simplistic_normalization', star_mode=False):
         self.parameters = parameters
         self.target = target
         self.normalize = normalize
+        self.normalize_method = normalize_method
         
         # Sampler configuration
         self.N_live_points = int(N_live_points)
@@ -73,7 +74,55 @@ class Retrieval:
         # Note: params dict may not have free_params keys yet (they're set during sampling),
         # so we need to include free_params keys as well. We only need the keys, not the values.
         all_param_keys = dict.fromkeys(list(self.parameters.params.keys()) + self.parameters.param_keys)
-        self.species = get_species_from_params(param_dict=all_param_keys, species_info_path=species_info_path)
+        self.species, self.species_colors = get_species_from_params(param_dict=all_param_keys, species_info_path=species_info_path)
+        
+        # For equilibrium chemistry, if line_species is empty (no log_* params),
+        # try to get from chemistry_kwargs and convert to pRT names
+        chem_mode = chemistry_kwargs.get('chem_mode', 'free')
+        if chem_mode in ['equilibrium', 'fastchem_live', 'fastchem_grid'] or len(self.species) == 0:
+            if 'line_species' in chemistry_kwargs:
+                line_species = chemistry_kwargs['line_species']
+                if line_species and isinstance(line_species, list):
+                    # Convert species_info names (e.g., 'H2O', '12CO') to pRT names (e.g., '1H2-16O', '12C-16O')
+                    import pandas as pd
+                    from core.paths import SRC_DIR
+                    
+                    if species_info_path is None:
+                        species_info_path = SRC_DIR / "atmosphere" / "species_info.csv"
+                    else:
+                        species_info_path = pathlib.Path(species_info_path)
+                    
+                    if not species_info_path.exists():
+                        # Try default path
+                        species_info_path = SRC_DIR / "atmosphere" / "species_info.csv"
+                    
+                    if species_info_path.exists():
+                        species_info = pd.read_csv(species_info_path, index_col=0)
+                        line_species_pRT = []
+                        for species in line_species:
+                            # Check if it's already a pRT name (contains '-' and numbers, e.g., '12C-16O')
+                            # or if it's a species_info name (e.g., 'H2O', '12CO')
+                            if '-' in species and any(c.isdigit() for c in species):
+                                # Already a pRT name, use as is
+                                line_species_pRT.append(species)
+                            elif species in species_info.index:
+                                # It's a species_info name, convert to pRT name
+                                pRT_name = species_info.loc[species, 'pRT_name']
+                                if pd.notna(pRT_name):
+                                    line_species_pRT.append(str(pRT_name))
+                                else:
+                                    warnings.warn(f"Species '{species}' found in species_info but pRT_name is missing. Using as is.")
+                                    line_species_pRT.append(species)
+                            else:
+                                # Unknown format, use as is (might be a pRT name we don't recognize)
+                                line_species_pRT.append(species)
+                        self.species = line_species_pRT
+                        print(f"[retrieval.py/Retrieval.__init__] Converted line_species from chemistry_kwargs to pRT names: {self.species}")
+                    else:
+                        warnings.warn(f"species_info.csv not found at {species_info_path}, using line_species as provided: {line_species}")
+                        self.species = line_species
+                else:
+                    self.species = line_species if line_species else []
 
         # Create atmosphere objects
         # Check if target is in chips_mode
@@ -89,7 +138,8 @@ class Retrieval:
                 cache_file=self.output_dir / "atmosphere_objects.pickle",
                 redo=redo_atmosphere,
                 chips_mode=True,
-                wave_ranges_chips=self.target.wave_ranges_chips
+                wave_ranges_chips=self.target.wave_ranges_chips,
+                star_mode=star_mode
             )
         else:
             # Single spectrum mode (backward compatible)
@@ -100,7 +150,8 @@ class Retrieval:
                 lbl_opacity_sampling=self.lbl_opacity_sampling,
                 wl_pad=self.wl_pad,
                 cache_file=self.output_dir / "atmosphere_objects.pickle",
-                redo=redo_atmosphere
+                redo=redo_atmosphere,
+                star_mode=star_mode
             )
 
         # Likelihood components
@@ -135,7 +186,7 @@ class Retrieval:
             f"TP_kwargs: {self.parameters.TP_kwargs}\n"
             f"chemistry_kwargs: {self.parameters.chemistry_kwargs}\n"
         )
-
+    
     # ----- MultiNest interface -----
     def PMN_lnL(self, cube, ndim, nparams):
         """
@@ -168,7 +219,7 @@ class Retrieval:
             # Debug: Log to file
             try:
                 with open(debug_file, 'a') as f:
-                    f.write(f"[PMN_lnL] After conversion: T_0={self.parameters.params.get('T_0')}, T_1={self.parameters.params.get('T_1')}\n")
+                    f.write(f"[PMN_lnL] After conversion: T_0={self.parameters.params.get('T_0')}, T_1={self.parameters.params.get('T_1')}, T_2={self.parameters.params.get('T_2')}, T_3={self.parameters.params.get('T_3')}, T_4={self.parameters.params.get('T_4')}\n")
                     f.write(f"[PMN_lnL] All params keys: {list(self.parameters.params.keys())}\n")
                     f.flush()
             except:
@@ -181,6 +232,7 @@ class Retrieval:
                 atmosphere=self.atmosphere,
                 lbl_opacity_sampling=self.lbl_opacity_sampling,
                 normalize=self.normalize,
+                normalize_method=self.normalize_method,
             )
             model_flux = model.make_spectrum()
 
@@ -255,6 +307,11 @@ class Retrieval:
             self.cornerplot()
             self.plot_spectrum()
             self.plot_tp_profile()
+            self.plot_vmr_profile()
+            
+            # Save VMR profile (live)
+            if self.model is not None:
+                self._save_vmr_profile()
         except (ValueError, TypeError, AttributeError):
             # If get_params_and_spectrum fails, skip plotting but continue sampling
             pass
@@ -295,7 +352,7 @@ class Retrieval:
             const_efficiency_mode=True,
             sampling_efficiency=0.5,
             dump_callback=self.PMN_callback,
-            n_iter_before_update=20,  # call back every 25 iterations
+            n_iter_before_update=10,  # call back every 25 iterations
         )
 
     # ----- Post-MultiNest analysis -----
@@ -422,6 +479,8 @@ class Retrieval:
             target=self.target,
             atmosphere=self.atmosphere,
             lbl_opacity_sampling=self.lbl_opacity_sampling,
+            normalize=self.normalize,
+            normalize_method=self.normalize_method,
         )
         self.model_flux = model.make_spectrum()
         self.model = model  # Store model for accessing TP profile
@@ -447,8 +506,33 @@ class Retrieval:
                           Default: True
         """
         start_time = time.time()
-        self.PMN_run(resume=resume)
-        print(f"\n[retrieval.py/Retrieval.run_retrieval] ----- MultiNest run completed. -----\n")
+        
+        # Check if retrieval has already converged (post_equal_weights.dat exists)
+        # If converged and resume=True, skip sampling to avoid changing posterior
+        data_file = self.output_dir / f"{self.prefix}post_equal_weights.dat"
+        if resume and data_file.exists():
+            try:
+                # Try to read the file to verify it's complete
+                test_data = np.loadtxt(data_file)
+                if test_data.size > 0 and len(test_data.shape) >= 1:
+                    print(f"\n[retrieval.py/Retrieval.run_retrieval] Found existing posterior file. "
+                          f"Retrieval appears to have converged. Skipping sampling to preserve existing results.\n")
+                    skip_sampling = True
+                else:
+                    skip_sampling = False
+            except (ValueError, IOError, OSError) as e:
+                # File exists but may be incomplete, continue with sampling
+                print(f"\n[retrieval.py/Retrieval.run_retrieval] Found posterior file but it appears incomplete. "
+                      f"Continuing with sampling.\n")
+                skip_sampling = False
+        else:
+            skip_sampling = False
+        
+        if not skip_sampling:
+            self.PMN_run(resume=resume)
+            print(f"\n[retrieval.py/Retrieval.run_retrieval] ----- MultiNest run completed. -----\n")
+        else:
+            print(f"\n[retrieval.py/Retrieval.run_retrieval] ----- Skipping MultiNest sampling (using existing results). -----\n")
         
         self.analyse()
         print(f"\n[retrieval.py/Retrieval.run_retrieval] ----- Analysis completed. -----\n")
@@ -478,6 +562,14 @@ class Retrieval:
             residuals = np.asarray(fl - model_fl).flatten()
             np.savetxt(self.output_dir / f"{self.callback_label}model_spectrum.dat", np.column_stack((wl, fl, err, model_fl, residuals)), header='Wavelength (nm) Data_Flux Data_Err Model_Flux Residuals', fmt='%.6f %.6f %.6f %.6f %.6f')
             print(f"[retrieval.py/Retrieval.run_retrieval] Model spectrum saved to {self.output_dir / f'{self.callback_label}model_spectrum.dat'}")
+            
+            # ----- save TP profile to a dat file (only for final plot, not live) -----
+            if self.callback_label == "final_" and self.model is not None:
+                self._save_tp_profile()
+            
+            # ----- save VMR profile to a dat file (for both live and final) -----
+            if self.model is not None:
+                self._save_vmr_profile()
 
         except Exception as e:
             print(f"[retrieval.py/Retrieval.run_retrieval] Error in plot_spectrum: {e}")
@@ -489,6 +581,14 @@ class Retrieval:
             print(f"[retrieval.py/Retrieval.run_retrieval] plot_tp_profile completed.")
         except Exception as e:
             print(f"[retrieval.py/Retrieval.run_retrieval] Error in plot_tp_profile: {e}")
+            import traceback
+            traceback.print_exc()
+        
+        try:
+            self.plot_vmr_profile()
+            print(f"[retrieval.py/Retrieval.run_retrieval] plot_vmr_profile completed.")
+        except Exception as e:
+            print(f"[retrieval.py/Retrieval.run_retrieval] Error in plot_vmr_profile: {e}")
             import traceback
             traceback.print_exc()
 
@@ -607,6 +707,8 @@ class Retrieval:
                     target=self.target,
                     atmosphere=self.atmosphere,
                     lbl_opacity_sampling=self.lbl_opacity_sampling,
+                    normalize=self.normalize,
+                    normalize_method=self.normalize_method,
                 )
                 temperature = temp_model.temperature
                 pressure = temp_model.pressure
@@ -650,21 +752,31 @@ class Retrieval:
                 knots_temperature_actual = np.array(knots_temperature_actual)
                 
                 # Calculate percentiles (16th, 50th, 84th) for each knot (for error bars)
-                knots_error_positive = []
-                knots_error_negative = []
+                knots_error_1sigma_positive = []
+                knots_error_1sigma_negative = []
+                knots_error_2sigma_positive = []
+                knots_error_2sigma_negative = []
                 
                 for idx in temp_knot_indices:
                     knot_samples = posterior_physical[:, idx]
                     median = np.percentile(knot_samples, 50.0)
+                    # 1sigma
                     p16 = np.percentile(knot_samples, 16.0)
                     p84 = np.percentile(knot_samples, 84.0)
-                    
-                    knots_error_positive.append(p84 - median)
-                    knots_error_negative.append(median - p16)
+                    # 2sigma
+                    p2_5 = np.percentile(knot_samples, 2.5)
+                    p97_5 = np.percentile(knot_samples, 97.5)
+
+                    knots_error_1sigma_positive.append(p84 - median)
+                    knots_error_1sigma_negative.append(median - p16)
+                    knots_error_2sigma_positive.append(p97_5 - median)
+                    knots_error_2sigma_negative.append(median - p2_5)
                 
                 knots_temperature = knots_temperature_actual  # Use actual model values, not median
-                knots_error_positive = np.array(knots_error_positive)
-                knots_error_negative = np.array(knots_error_negative)
+                knots_error_1sigma_positive = np.array(knots_error_1sigma_positive)
+                knots_error_1sigma_negative = np.array(knots_error_1sigma_negative)
+                knots_error_2sigma_positive = np.array(knots_error_2sigma_positive)
+                knots_error_2sigma_negative = np.array(knots_error_2sigma_negative)
                 
                 # Get pressure knots from TP profile
                 # Try to get log_P_knots from the TP profile object (use model_to_use instead of self.model)
@@ -689,18 +801,22 @@ class Retrieval:
                 
                 # Ensure knots are sorted by pressure (ascending: low pressure to high pressure)
                 knots_temperature = knots_temperature[::-1]
-                knots_error_positive = knots_error_positive[::-1]
-                knots_error_negative = knots_error_negative[::-1]
+                knots_error_1sigma_positive = knots_error_1sigma_positive[::-1]
+                knots_error_1sigma_negative = knots_error_1sigma_negative[::-1]
+                knots_error_2sigma_positive = knots_error_2sigma_positive[::-1]
+                knots_error_2sigma_negative = knots_error_2sigma_negative[::-1]
                 # Now sort by pressure (ascending)
                 sort_idx = np.argsort(knots_pressure)
                 knots_pressure = knots_pressure[sort_idx]
                 knots_temperature = knots_temperature[sort_idx]
-                knots_error_positive = knots_error_positive[sort_idx]
-                knots_error_negative = knots_error_negative[sort_idx]
+                knots_error_1sigma_positive = knots_error_1sigma_positive[sort_idx]
+                knots_error_1sigma_negative = knots_error_1sigma_negative[sort_idx]
+                knots_error_2sigma_positive = knots_error_2sigma_positive[sort_idx]
+                knots_error_2sigma_negative = knots_error_2sigma_negative[sort_idx]
                 
                 print(f"[retrieval.py/Retrieval.plot_tp_profile] Found {len(temp_knot_keys)} TP knots: {temp_knot_keys}")
                 print(f"[retrieval.py/Retrieval.plot_tp_profile] knots_temperature shape: {knots_temperature.shape}, knots_pressure shape: {knots_pressure.shape}")
-                print(f"[retrieval.py/Retrieval.plot_tp_profile] knots_error_positive shape: {knots_error_positive.shape}, knots_error_negative shape: {knots_error_negative.shape}")
+                print(f"[retrieval.py/Retrieval.plot_tp_profile] knots_error_1sigma_positive shape: {knots_error_1sigma_positive.shape}, knots_error_1sigma_negative shape: {knots_error_1sigma_negative.shape}, knots_error_2sigma_positive shape: {knots_error_2sigma_positive.shape}, knots_error_2sigma_negative shape: {knots_error_2sigma_negative.shape}")
             else:
                 print(f"[retrieval.py/Retrieval.plot_tp_profile] Warning: No TP knot parameters found in param_keys.")
         else:
@@ -722,13 +838,509 @@ class Retrieval:
             tp_history=tp_history,
             knots_temperature=knots_temperature,
             knots_pressure=knots_pressure,
-            knots_error_positive=knots_error_positive,
-            knots_error_negative=knots_error_negative,
+            knots_error_positive=knots_error_2sigma_positive,
+            knots_error_negative=knots_error_2sigma_negative,
             interp_mode=interp_mode
         )
         print(f"[retrieval.py/Retrieval.plot_tp_profile] TP profile plot saved successfully.")
     
     # ===== Helper methods =====
+    def _save_tp_profile(self):
+        """
+        Save TP profile and error bars to final_tp.dat file.
+        
+        The file contains:
+        - Pressure [bar]
+        - Temperature [K] (median)
+        - Temperature error positive [K] (84th percentile - median)
+        - Temperature error negative [K] (median - 16th percentile)
+        """
+        if self.model is None:
+            print(f"[retrieval.py/Retrieval._save_tp_profile] Warning: self.model is None, cannot save TP profile.")
+            return
+        
+        if self.posterior is None:
+            print(f"[retrieval.py/Retrieval._save_tp_profile] Warning: self.posterior is None, cannot calculate TP profile errors.")
+            return
+        
+        # Get TP profile from model
+        pressure = self.model.pressure.copy()
+        temperature_median = self.model.temperature.copy()
+        
+        # Calculate temperature errors from posterior
+        # We need to compute TP profiles for all posterior samples to get error bars
+        n_atm_layers = len(pressure)
+        n_samples = self.posterior.shape[0]
+        
+        # Limit number of samples for efficiency (use at most 1000 samples)
+        max_samples = min(1000, n_samples)
+        sample_indices = np.linspace(0, n_samples - 1, max_samples, dtype=int)
+        
+        print(f"[retrieval.py/Retrieval._save_tp_profile] Computing TP profiles for {max_samples} posterior samples to estimate errors...")
+        
+        # Store temperature profiles for all samples
+        temperature_samples = np.zeros((max_samples, n_atm_layers))
+        
+        # Save current parameter state
+        saved_params = self.parameters.params.copy()
+        
+        try:
+            # Convert posterior to physical values and compute TP profiles
+            for idx, sample_idx in enumerate(sample_indices):
+                if (idx + 1) % 100 == 0:
+                    print(f"[retrieval.py/Retrieval._save_tp_profile] Processing sample {idx + 1}/{max_samples}...")
+                
+                # Get normalized sample from posterior
+                cube = self.posterior[sample_idx].copy()
+                
+                # Convert to physical parameters
+                self.parameters(cube)
+                
+                # Create temporary model to get TP profile
+                temp_model = pRT_spectrum(
+                    parameters=self.parameters,
+                    target=self.target,
+                    atmosphere=self.atmosphere,
+                    lbl_opacity_sampling=self.lbl_opacity_sampling,
+                    normalize=self.normalize,
+                    normalize_method=self.normalize_method,
+                )
+                
+                # Store temperature profile
+                temperature_samples[idx] = temp_model.temperature.copy()
+        finally:
+            # Restore original parameter state
+            self.parameters.params = saved_params
+        
+        # Calculate percentiles for each pressure layer
+        temperature_error_1sigma_positive = np.zeros(n_atm_layers)
+        temperature_error_1sigma_negative = np.zeros(n_atm_layers)
+        temperature_error_2sigma_positive = np.zeros(n_atm_layers)
+        temperature_error_2sigma_negative = np.zeros(n_atm_layers)
+        
+        for i in range(n_atm_layers):
+            temp_values = temperature_samples[:, i]
+            median = np.percentile(temp_values, 50.0)
+            # 1sigma
+            p16 = np.percentile(temp_values, 16.0)
+            p84 = np.percentile(temp_values, 84.0)
+            # 2sigma
+            p2_5 = np.percentile(temp_values, 2.5)
+            p97_5 = np.percentile(temp_values, 97.5)
+
+            temperature_error_1sigma_positive[i] = p84 - median
+            temperature_error_1sigma_negative[i] = median - p16
+            temperature_error_2sigma_positive[i] = p97_5 - median
+            temperature_error_2sigma_negative[i] = median - p2_5
+        
+        # Save to file
+        output_file = self.output_dir / "final_tp.dat"
+        header = 'Pressure (bar) Temperature (K) Temperature_error_-1sigma (K) Temperature_error_+1sigma (K) Temperature_error_-2sigma (K) Temperature_error_+2sigma (K)'
+        data = np.column_stack((
+            pressure,
+            temperature_median,
+            temperature_error_1sigma_positive,
+            temperature_error_1sigma_negative,
+            temperature_error_2sigma_positive,
+            temperature_error_2sigma_negative
+        ))
+        np.savetxt(output_file, data, header=header, fmt='%.6e %.2f %.2f %.2f %.2f %.2f')
+        print(f"[retrieval.py/Retrieval._save_tp_profile] TP profile saved to {output_file}")
+    
+    def _compute_vmr_errors(self):
+        """
+        Compute VMR error bars (95% confidence interval) from posterior samples.
+        
+        Returns:
+            dict: Dictionary mapping species names to error arrays.
+                Each error array has shape (n_layers, 2) where columns are [lower, upper] errors.
+        """
+        if self.posterior is None:
+            print(f"[retrieval.py/Retrieval._compute_vmr_errors] Warning: self.posterior is None, cannot calculate VMR errors.")
+            return None
+        
+        if self.model is None:
+            print(f"[retrieval.py/Retrieval._compute_vmr_errors] Warning: self.model is None, cannot get VMR structure.")
+            return None
+        
+        # Get pressure grid from model
+        pressure = self.model.pressure.copy()
+        n_atm_layers = len(pressure)
+        n_samples = self.posterior.shape[0]
+        
+        # Limit number of samples for efficiency (use at most 1000 samples)
+        max_samples = min(1000, n_samples)
+        sample_indices = np.linspace(0, n_samples - 1, max_samples, dtype=int)
+        
+        print(f"[retrieval.py/Retrieval._compute_vmr_errors] Computing VMR profiles for {max_samples} posterior samples to estimate errors...")
+        
+        # Get species list from current model
+        if not hasattr(self.model, 'chemistry') or not hasattr(self.model.chemistry, 'VMRs'):
+            print(f"[retrieval.py/Retrieval._compute_vmr_errors] Warning: Cannot access VMRs from model.chemistry.")
+            return None
+        
+        current_vmrs = self.model.chemistry.VMRs
+        if current_vmrs is None or not isinstance(current_vmrs, dict):
+            print(f"[retrieval.py/Retrieval._compute_vmr_errors] Warning: VMRs is None or not a dict.")
+            return None
+        
+        species_list = list(current_vmrs.keys())
+        # Filter out H2, He (MMW will be handled separately from chemistry.MMW attribute)
+        species_list = [s for s in species_list if s not in ['H2', 'He']]
+        
+        # Check if MMW should be computed (from chemistry.MMW attribute)
+        include_mmw = False
+        if hasattr(self.model.chemistry, 'MMW') and self.model.chemistry.MMW is not None:
+            include_mmw = True
+        
+        if len(species_list) == 0 and not include_mmw:
+            print(f"[retrieval.py/Retrieval._compute_vmr_errors] Warning: No species found in VMRs (excluding H2, He) and no MMW available.")
+            return None
+        
+        # Store VMR profiles for all samples
+        vmr_samples = {species: np.zeros((max_samples, n_atm_layers)) for species in species_list}
+        # Also store MMW samples if needed
+        if include_mmw:
+            vmr_samples['MMW'] = np.zeros((max_samples, n_atm_layers))
+        
+        # Save current parameter state
+        saved_params = self.parameters.params.copy()
+        
+        try:
+            # Convert posterior to physical values and compute VMR profiles
+            for idx, sample_idx in enumerate(sample_indices):
+                if (idx + 1) % 100 == 0:
+                    print(f"[retrieval.py/Retrieval._compute_vmr_errors] Processing sample {idx + 1}/{max_samples}...")
+                
+                # Get normalized sample from posterior
+                cube = self.posterior[sample_idx].copy()
+                
+                # Convert to physical parameters
+                self.parameters(cube)
+                
+                # Create temporary model to get VMR profile
+                temp_model = pRT_spectrum(
+                    parameters=self.parameters,
+                    target=self.target,
+                    atmosphere=self.atmosphere,
+                    lbl_opacity_sampling=self.lbl_opacity_sampling,
+                    normalize=self.normalize,
+                    normalize_method=self.normalize_method,
+                )
+                
+                # Get VMRs from chemistry object
+                if hasattr(temp_model, 'chemistry') and hasattr(temp_model.chemistry, 'VMRs'):
+                    temp_vmrs = temp_model.chemistry.VMRs
+                    if temp_vmrs is not None and isinstance(temp_vmrs, dict):
+                        for species in species_list:
+                            if species in temp_vmrs:
+                                vmr_samples[species][idx] = temp_vmrs[species].copy()
+                
+                # Get MMW from chemistry object if needed
+                if include_mmw and hasattr(temp_model, 'chemistry') and hasattr(temp_model.chemistry, 'MMW'):
+                    if temp_model.chemistry.MMW is not None:
+                        vmr_samples['MMW'][idx] = temp_model.chemistry.MMW.copy()
+        finally:
+            # Restore original parameter state
+            self.parameters.params = saved_params
+        
+        # Calculate percentiles (2.5th, 50th, 97.5th) for each pressure layer (95% CI)
+        vmr_errors = {}
+        vmr_medians = {}
+        
+        # Process regular species
+        for species in species_list:
+            vmr_error_positive = np.zeros(n_atm_layers)
+            vmr_error_negative = np.zeros(n_atm_layers)
+            vmr_median = np.zeros(n_atm_layers)
+            
+            for i in range(n_atm_layers):
+                vmr_values = vmr_samples[species][:, i]
+                # Remove any invalid values (NaN, inf, negative)
+                vmr_values = vmr_values[np.isfinite(vmr_values) & (vmr_values > 0)]
+                
+                if len(vmr_values) > 0:
+                    median = np.percentile(vmr_values, 50.0)
+                    p2_5 = np.percentile(vmr_values, 2.5)
+                    p97_5 = np.percentile(vmr_values, 97.5)
+                    
+                    vmr_median[i] = median
+                    vmr_error_positive[i] = p97_5 - median
+                    vmr_error_negative[i] = median - p2_5
+                else:
+                    # If all values are invalid, use zeros
+                    vmr_median[i] = 0.0
+                    vmr_error_positive[i] = 0.0
+                    vmr_error_negative[i] = 0.0
+            
+            # Store errors as [lower, upper] for each layer
+            vmr_errors[species] = np.column_stack([vmr_error_negative, vmr_error_positive])
+            vmr_medians[species] = vmr_median
+        
+        # Process MMW if included
+        if include_mmw:
+            mmw_error_positive = np.zeros(n_atm_layers)
+            mmw_error_negative = np.zeros(n_atm_layers)
+            mmw_median = np.zeros(n_atm_layers)
+            
+            for i in range(n_atm_layers):
+                mmw_values = vmr_samples['MMW'][:, i]
+                # Remove any invalid values (NaN, inf)
+                mmw_values = mmw_values[np.isfinite(mmw_values) & (mmw_values > 0)]
+                
+                if len(mmw_values) > 0:
+                    median = np.percentile(mmw_values, 50.0)
+                    p2_5 = np.percentile(mmw_values, 2.5)
+                    p97_5 = np.percentile(mmw_values, 97.5)
+                    
+                    mmw_median[i] = median
+                    mmw_error_positive[i] = p97_5 - median
+                    mmw_error_negative[i] = median - p2_5
+                else:
+                    # If all values are invalid, use zeros
+                    mmw_median[i] = 0.0
+                    mmw_error_positive[i] = 0.0
+                    mmw_error_negative[i] = 0.0
+            
+            # Store errors as [lower, upper] for each layer
+            vmr_errors['MMW'] = np.column_stack([mmw_error_negative, mmw_error_positive])
+            vmr_medians['MMW'] = mmw_median
+        
+        n_species_total = len(species_list) + (1 if include_mmw else 0)
+        print(f"[retrieval.py/Retrieval._compute_vmr_errors] VMR errors computed for {n_species_total} species (including MMW).")
+        return vmr_errors, vmr_medians
+    
+    def _save_vmr_profile(self):
+        """
+        Save VMR profiles and error bars to {callback_label}vmr.dat file.
+        
+        For live plots: saves current best-fit VMRs without errors.
+        For final plots: saves median VMRs with 95% confidence intervals.
+        
+        The file contains:
+        - Pressure [bar]
+        - For each species: VMR (median or best-fit), VMR_error_lower, VMR_error_upper (final only)
+        """
+        if self.model is None:
+            print(f"[retrieval.py/Retrieval._save_vmr_profile] Warning: self.model is None, cannot save VMR profile.")
+            return
+        
+        # Get VMRs from current model
+        if not hasattr(self.model, 'chemistry') or not hasattr(self.model.chemistry, 'VMRs'):
+            print(f"[retrieval.py/Retrieval._save_vmr_profile] Warning: Cannot access VMRs from model.chemistry.")
+            return
+        
+        vmrs = self.model.chemistry.VMRs
+        if vmrs is None or not isinstance(vmrs, dict):
+            print(f"[retrieval.py/Retrieval._save_vmr_profile] Warning: VMRs is None or not a dict.")
+            return
+        
+        # Get pressure grid
+        pressure = self.model.pressure.copy()
+        
+        # Compute errors only for final plot (requires posterior)
+        vmr_errors = {}
+        vmr_medians = {}
+        if self.callback_label == "final_" and self.posterior is not None:
+            result = self._compute_vmr_errors()
+            if result is not None:
+                vmr_errors, vmr_medians = result
+            else:
+                print(f"[retrieval.py/Retrieval._save_vmr_profile] Warning: Could not compute VMR errors. Saving without errors.")
+        
+        # Filter out H2, He --> MMW should be saved in the vmr.dat file
+        species_list = [s for s in vmrs.keys() if s not in ['H2', 'He']]
+        
+        # Check if MMW should be added (from chemistry.MMW attribute, not from VMRs dict)
+        include_mmw = False
+        mmw_value = None
+        mmw_median = None
+        mmw_errors = None
+        if hasattr(self.model.chemistry, 'MMW') and self.model.chemistry.MMW is not None:
+            include_mmw = True
+            mmw_value = self.model.chemistry.MMW.copy()
+        
+        if len(species_list) == 0 and not include_mmw:
+            print(f"[retrieval.py/Retrieval._save_vmr_profile] Warning: No species found in VMRs (excluding H2, He) and no MMW available.")
+            return
+        
+        # Prepare data for saving
+        # Format: Pressure, then for each species: VMR (best-fit for live, median for final), VMR_error_lower, VMR_error_upper (final only)
+        data_columns = [pressure]
+        header_parts = ['Pressure (bar)']
+        
+        for species in species_list:
+            if species in vmrs:
+                # Use median from posterior if available (final), otherwise use current model value (live)
+                if species in vmr_medians:
+                    vmr_value = vmr_medians[species]
+                else:
+                    vmr_value = vmrs[species]
+                
+                data_columns.append(vmr_value)
+                header_parts.append(f'{species}_VMR')
+                
+                # Add errors only for final plot
+                if self.callback_label == "final_" and species in vmr_errors:
+                    errors = vmr_errors[species]
+                    data_columns.append(errors[:, 0])  # lower error
+                    data_columns.append(errors[:, 1])  # upper error
+                    header_parts.append(f'{species}_VMR_error_lower')
+                    header_parts.append(f'{species}_VMR_error_upper')
+        
+        # Add MMW if available
+        if include_mmw:
+            # Use median from posterior if available (final), otherwise use current model value (live)
+            if 'MMW' in vmr_medians:
+                mmw_value = vmr_medians['MMW']
+            elif mmw_value is None:
+                mmw_value = self.model.chemistry.MMW.copy()
+            
+            data_columns.append(mmw_value)
+            header_parts.append('MMW')
+            
+            # Add errors only for final plot
+            if self.callback_label == "final_" and 'MMW' in vmr_errors:
+                mmw_errors = vmr_errors['MMW']
+                data_columns.append(mmw_errors[:, 0])  # lower error
+                data_columns.append(mmw_errors[:, 1])  # upper error
+                header_parts.append('MMW_error_lower')
+                header_parts.append('MMW_error_upper')
+        
+        # Save to file
+        output_file = self.output_dir / f"{self.callback_label}vmr.dat"
+        header = ' '.join(header_parts)
+        data = np.column_stack(data_columns)
+        
+        # Create format string
+        fmt_parts = ['%.6e']  # Pressure
+        for species in species_list:
+            fmt_parts.append('%.6e')  # VMR
+            if self.callback_label == "final_" and species in vmr_errors:
+                fmt_parts.append('%.6e')  # lower error
+                fmt_parts.append('%.6e')  # upper error
+        # Add format for MMW if included
+        if include_mmw:
+            fmt_parts.append('%.6e')  # MMW
+            if self.callback_label == "final_" and mmw_errors is not None:
+                fmt_parts.append('%.6e')  # lower error
+                fmt_parts.append('%.6e')  # upper error
+        fmt = ' '.join(fmt_parts)
+        
+        np.savetxt(output_file, data, header=header, fmt=fmt)
+        print(f"[retrieval.py/Retrieval._save_vmr_profile] VMR profile saved to {output_file}")
+        
+        # Also save as pickle for easier loading
+        vmr_dict = {
+            'pressure': pressure,
+            'vmrs': {species: vmrs[species] for species in species_list},
+            'vmr_medians': vmr_medians if vmr_medians else {},
+            'vmr_errors': vmr_errors if vmr_errors else {}
+        }
+        # Add MMW to pickle if available
+        if include_mmw:
+            vmr_dict['mmw'] = mmw_value
+            if 'MMW' in vmr_medians:
+                vmr_dict['mmw_median'] = vmr_medians['MMW']
+            if 'MMW' in vmr_errors:
+                vmr_dict['mmw_errors'] = vmr_errors['MMW']
+        import pickle
+        with open(self.output_dir / f"{self.callback_label}vmr.pkl", "wb") as f:
+            pickle.dump(vmr_dict, f)
+        print(f"[retrieval.py/Retrieval._save_vmr_profile] VMR dictionary saved to {self.output_dir / f'{self.callback_label}vmr.pkl'}")
+    
+    def plot_vmr_profile(self):
+        """
+        Plot VMR profiles with error bars.
+        """
+        # Get chemistry object and VMRs
+        chemistry = None
+        vmrs = None
+        pressure = None
+        
+        if self.model is None:
+            print(f"[retrieval.py/Retrieval.plot_vmr_profile] Warning: self.model is None, trying bestfit_params...")
+            # Try to get VMR profile from bestfit parameters if model not available
+            if self.bestfit_params is not None:
+                print(f"[retrieval.py/Retrieval.plot_vmr_profile] Creating temporary model from bestfit_params...")
+                from copy import deepcopy
+                temp_parameters = deepcopy(self.parameters)
+                temp_parameters(self.bestfit_params)
+                temp_model = pRT_spectrum(
+                    parameters=temp_parameters,
+                    target=self.target,
+                    atmosphere=self.atmosphere,
+                    lbl_opacity_sampling=self.lbl_opacity_sampling,
+                    normalize=self.normalize,
+                    normalize_method=self.normalize_method,
+                )
+                vmrs = temp_model.chemistry.VMRs if hasattr(temp_model, 'chemistry') and hasattr(temp_model.chemistry, 'VMRs') else None
+                pressure = temp_model.pressure
+                chemistry = temp_model.chemistry if hasattr(temp_model, 'chemistry') else None
+            else:
+                print(f"[retrieval.py/Retrieval.plot_vmr_profile] Warning: self.bestfit_params is also None, skipping VMR profile plot.")
+                return
+        else:
+            vmrs = self.model.chemistry.VMRs if hasattr(self.model, 'chemistry') and hasattr(self.model.chemistry, 'VMRs') else None
+            pressure = self.model.pressure
+            chemistry = self.model.chemistry if hasattr(self.model, 'chemistry') else None
+        
+        if vmrs is None or not isinstance(vmrs, dict):
+            print(f"[retrieval.py/Retrieval.plot_vmr_profile] Warning: VMRs is None or not a dict, skipping VMR profile plot.")
+            return
+        
+        # Convert species_colors from pRT_name keys to species_info index keys
+        # vmrs_dict uses species_info index names (e.g., '12CO'), but species_colors uses pRT_name (e.g., '12C-16O__HITEMP')
+        species_colors_converted = {}
+        if self.species_colors is not None and chemistry is not None and hasattr(chemistry, 'species_info'):
+            for species_name in vmrs.keys():
+                # Skip H2, He, MMW
+                if species_name in ['H2', 'He', 'MMW']:
+                    continue
+                # Try to get pRT_name for this species
+                try:
+                    if species_name in chemistry.species_info.index:
+                        pRT_name = chemistry.read_species_info(species_name, 'pRT_name')
+                        # Look up color using pRT_name
+                        if pRT_name in self.species_colors:
+                            species_colors_converted[species_name] = self.species_colors[pRT_name]
+                        else:
+                            # If not found, try to get color directly from species_info
+                            try:
+                                color = chemistry.read_species_info(species_name, 'color')
+                                species_colors_converted[species_name] = str(color)
+                            except (ValueError, KeyError):
+                                pass  # Will use default color
+                except (ValueError, KeyError):
+                    pass  # Species not in species_info, will use default color
+        elif self.species_colors is not None:
+            # Fallback: try direct lookup (in case keys already match)
+            species_colors_converted = self.species_colors
+        
+        # Compute errors if posterior is available (only for final plot)
+        vmr_error_dict = None
+        if self.posterior is not None and self.callback_label == "final_":
+            print(f"[retrieval.py/Retrieval.plot_vmr_profile] Computing VMR errors from posterior...")
+            result = self._compute_vmr_errors()
+            if result is not None:
+                vmr_error_dict, vmr_medians = result
+                # Use medians instead of current model values for final plot
+                for species in vmr_medians:
+                    if species in vmrs:
+                        vmrs[species] = vmr_medians[species]
+        
+        print(f"[retrieval.py/Retrieval.plot_vmr_profile] Creating VMR profile plot, saving to {self.output_dir / f'{self.callback_label}vmr_profile.pdf'}")
+        plot_vmr_profile(
+            vmrs_dict=vmrs,
+            pressure=pressure,
+            output_path=self.output_dir,
+            callback_label=self.callback_label,
+            title=f"{self.target.name} VMR Profile",
+            vmr_error_dict=vmr_error_dict,
+            species_colors=species_colors_converted if species_colors_converted else None
+        )
+        print(f"[retrieval.py/Retrieval.plot_vmr_profile] VMR profile plot saved successfully.")
+    
     def _create_pressure_from_tp_kwargs(self):
         """
         Create pressure grid from TP_kwargs.

@@ -43,7 +43,7 @@ def main():
     """Main function to run the retrieval with CRIRES+ data."""
     # 1. set up pRT input data path
     setup_prt_path()
-    prefix_crires = "whole"
+    prefix_crires = "5_0"
 
     # 2. load CRIRES+ spectrum
     wave, flux, err = load_crires_dat(  # micron -> nm
@@ -58,8 +58,8 @@ def main():
     # 3. select order and detector, flatten to 1D
     wave_norm, flux_norm, err_norm = select_order_and_flatten(
         wave, flux, err,
-        orders=[5,6],
-        dets=[0,1,2],
+        orders=[5],
+        dets=[0],
         normalize=False
     )
 
@@ -80,14 +80,14 @@ def main():
     )
 
     # 5. load parameters & run retrieval
-    parameters = Parameters(config_file=CONFIG_DIR / "CD-35_2722" / "2022-12-31" / "config_example.py", debug=False)
+    parameters = Parameters(config_file=CONFIG_DIR / "CD-35_2722" / "2022-12-31" / "config_starA.py", debug=False)
 
     retrieval = Retrieval(
         parameters=parameters,
         target=target,
         N_live_points=200,
         evidence_tolerance=0.5,
-        output_subdir=f"CD-35_2722/2022-12-31/starA/{prefix_crires}",  # Output to output/retrievals/{output_subdir}/N{...}_ev{...}/
+        output_subdir=f"CD-35_2722/2022-12-31/starA/chips/{prefix_crires}",  # Output to output/retrievals/{output_subdir}/N{...}_ev{...}/
         normalize=False
     )
 

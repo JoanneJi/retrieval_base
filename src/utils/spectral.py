@@ -120,15 +120,15 @@ def instr_broadening(wave, flux, out_res=1e6, in_res=1e6):
     sigma_LSF_gauss_filter = sigma_LSF / spacing
     
     # Check if sigma is too small to have any effect
-    if sigma_LSF_gauss_filter < 0.1:
-        import warnings
-        warnings.warn(
-            f"sigma_LSF_gauss_filter ({sigma_LSF_gauss_filter:.6f} pixels) is too small. "
-            f"Gaussian filter will have negligible effect. "
-            f"out_res={out_res:.0f}, in_res={in_res:.0f}. "
-            "Consider using a larger resolution difference.",
-            UserWarning
-        )
+    # if sigma_LSF_gauss_filter < 0.1:
+    #     import warnings
+    #     warnings.warn(
+    #         f"sigma_LSF_gauss_filter ({sigma_LSF_gauss_filter:.6f} pixels) is too small. "
+    #         f"Gaussian filter will have negligible effect. "
+    #         f"out_res={out_res:.0f}, in_res={in_res:.0f}. "
+    #         "Consider using a larger resolution difference.",
+    #         UserWarning
+    #     )
     
     # Apply gaussian filter to broaden with the spectral resolution
     flux_LSF = gaussian_filter(flux, sigma=sigma_LSF_gauss_filter, mode='nearest')

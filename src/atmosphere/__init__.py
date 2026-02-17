@@ -51,6 +51,7 @@ def get_species_from_params(param_dict, species_info_path=None):
     
     # Extract all log_* parameters (excluding log_g)
     chem_species = []
+    species_colors = {}
     for par in param_dict:
         if 'log_' in par and par != 'log_g':
             chem_species.append(par)
@@ -60,6 +61,9 @@ def get_species_from_params(param_dict, species_info_path=None):
     for chemspec in chem_species:
         # Remove 'log_' prefix to get species name
         species_name = chemspec[4:]  # e.g., 'log_12CO' -> '12CO'
+        # but skip if it starts with 'log_P_quench_<>' or 'log_Kzz_chem'
+        if species_name.startswith('P_quench_') or species_name.startswith('Kzz_chem') or species_name.startswith('P_base_gray') or species_name.startswith('opa_base_gray'):
+            continue
         if species_name not in species_info.index:
             warnings.warn(
                 f"Species '{species_name}' from parameter '{chemspec}' "
@@ -67,9 +71,10 @@ def get_species_from_params(param_dict, species_info_path=None):
             )
             continue
         prt_name = species_info.loc[species_name, 'pRT_name']
+        species_colors[prt_name] = str(species_info.loc[species_name, 'color'])
         species.append(prt_name)
     
-    return species
+    return species, species_colors
 
 
 def setup_radtrans_atmosphere(
@@ -81,7 +86,8 @@ def setup_radtrans_atmosphere(
     cache_file=None,
     redo=False,
     chips_mode=False,
-    wave_ranges_chips=None
+    wave_ranges_chips=None,
+    star_mode=False
 ):
     """
     Create and optionally cache Radtrans atmosphere objects.
@@ -104,6 +110,7 @@ def setup_radtrans_atmosphere(
         chips_mode (bool): If True, treat as multi-chip spectrum
         wave_ranges_chips (np.ndarray, optional): Wavelength ranges for each chip,
             shape (n_chips, 2) with [min, max] per chip. Required if chips_mode=True.
+        star_mode (bool): If True, add 'H-' to gas_continuum_contributors. Defaults to False.
     
     Returns:
         Radtrans or list of Radtrans: Configured Radtrans atmosphere object(s)
@@ -156,10 +163,15 @@ def setup_radtrans_atmosphere(
         print(f'Line-by-line opacity sampling: {lbl_opacity_sampling}')
         
         # Create single Radtrans object covering all chips
+        # Set gas_continuum_contributors based on star_mode
+        gas_continuum = ['H2-H2', 'H2-He']
+        if star_mode:
+            gas_continuum.append('H-')
+        
         atmosphere_objects = Radtrans(
             line_species=species,
             rayleigh_species=['H2', 'He'],
-            gas_continuum_contributors=['H2-H2', 'H2-He'],
+            gas_continuum_contributors=gas_continuum,
             wavelength_boundaries=boundary,
             line_opacity_mode='lbl',
             line_by_line_opacity_sampling=lbl_opacity_sampling,
@@ -190,10 +202,15 @@ def setup_radtrans_atmosphere(
         print(f'Line-by-line opacity sampling: {lbl_opacity_sampling}')
         
         # Create Radtrans object
+        # Set gas_continuum_contributors based on star_mode
+        gas_continuum = ['H2-H2', 'H2-He']
+        if star_mode:
+            gas_continuum.append('H-')
+        
         atmosphere_objects = Radtrans(
             line_species=species,
             rayleigh_species=['H2', 'He'],
-            gas_continuum_contributors=['H2-H2', 'H2-He'],
+            gas_continuum_contributors=gas_continuum,
             wavelength_boundaries=boundary,
             line_opacity_mode='lbl',
             line_by_line_opacity_sampling=lbl_opacity_sampling,

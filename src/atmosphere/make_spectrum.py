@@ -10,7 +10,15 @@ from PyAstronomy.pyasl import helcorr
 from PyAstronomy.pyasl import fastRotBroad
 from atmosphere.chemistry import get_class as get_chemistry_class
 from atmosphere.tp import get_class as get_tp_class
+from atmosphere.cloud import get_class as get_cloud_class
 from utils.spectral import convolve_to_resolution, instr_broadening
+from utils.normalization import (
+    simplistic_normalization,
+    low_resolution_normalization,
+    median_highpass_normalization,
+    gaussian_lfp,
+    savgol_lfp
+)
 
 
 class pRT_spectrum:
@@ -27,7 +35,8 @@ class pRT_spectrum:
     """
 
     def __init__(self, parameters, target, atmosphere, spectral_resolution=100_000, 
-                 lbl_opacity_sampling=3, normalize=True, contribution=False, debug=False):
+                 lbl_opacity_sampling=3, normalize=True, normalize_method='simplistic_normalization',
+                 contribution=False, debug=False):
         self.parameters = parameters
         self.params = parameters.params  # shorthand
         self.target = target
@@ -50,6 +59,7 @@ class pRT_spectrum:
         self.spectral_resolution = spectral_resolution
         self.lbl_opacity_sampling = lbl_opacity_sampling
         self.normalize = normalize
+        self.normalize_method = normalize_method
         self.contribution = contribution
         self.debug = debug
 
@@ -100,12 +110,108 @@ class pRT_spectrum:
         # Get species_info_path from chemistry_kwargs (will be None if not specified, which uses default)
         from atmosphere import get_species_from_params
         species_info_path = chemistry_kwargs.get('species_info_path')
-        line_species = get_species_from_params(param_dict=self.params, species_info_path=species_info_path)
+        line_species_from_params = get_species_from_params(param_dict=self.params, species_info_path=species_info_path)  # from 'log_xxx'
+        
+        chem_mode = chemistry_kwargs.get('chem_mode', 'free')
+        
+        # Helper function to convert line_species to pRT names
+        def convert_line_species_to_pRT(line_species_list, species_info_path, debug=False):
+            """Convert line_species from species_info names to pRT names if needed."""
+            if not line_species_list or not isinstance(line_species_list, list):
+                return line_species_list
+            
+            # Quick check: if all are already pRT names, use directly
+            all_pRT_names = all('-' in str(s) and any(c.isdigit() for c in str(s)) for s in line_species_list)
+            if all_pRT_names:
+                if debug:
+                    print(f"[atmosphere/make_spectrum.py/pRT_spectrum] Using pre-converted pRT names: {line_species_list}")
+                return line_species_list
+            
+            # Need to convert species_info names (e.g., 'H2O', '12CO') to pRT names (e.g., '1H2-16O', '12C-16O')
+            import pathlib
+            import pandas as pd
+            from core.paths import SRC_DIR
+            
+            if species_info_path is None:
+                species_info_path = SRC_DIR / "atmosphere" / "species_info.csv"
+            else:
+                species_info_path = pathlib.Path(species_info_path)
+            
+            if not species_info_path.exists():
+                # Try default path
+                species_info_path = SRC_DIR / "atmosphere" / "species_info.csv"
+            
+            if species_info_path.exists():
+                species_info = pd.read_csv(species_info_path, index_col=0)
+                line_species_pRT = []
+                for species in line_species_list:
+                    # Check if it's already a pRT name (contains '-' and numbers, e.g., '12C-16O')
+                    # or if it's a species_info name (e.g., 'H2O', '12CO')
+                    if '-' in str(species) and any(c.isdigit() for c in str(species)):
+                        # Already a pRT name, use as is
+                        line_species_pRT.append(species)
+                    elif species in species_info.index:
+                        # It's a species_info name, convert to pRT name
+                        pRT_name = species_info.loc[species, 'pRT_name']
+                        if pd.notna(pRT_name):
+                            line_species_pRT.append(str(pRT_name))
+                        else:
+                            warnings.warn(f"Species '{species}' found in species_info but pRT_name is missing. Using as is.")
+                            line_species_pRT.append(species)
+                    else:
+                        # Unknown format, use as is (might be a pRT name we don't recognize)
+                        line_species_pRT.append(species)
+                if debug:
+                    print(f"[atmosphere/make_spectrum.py/pRT_spectrum] Converted line_species from chemistry_kwargs to pRT names: {line_species_pRT}")
+                return line_species_pRT
+            else:
+                if debug:
+                    print(f"[atmosphere/make_spectrum.py/pRT_spectrum] species_info.csv not found, using line_species as provided: {line_species_list}")
+                return line_species_list
+        
+        # For fastchem_live and fastchem_grid: always use line_species from chemistry_kwargs if provided
+        # (ignore line_species extracted from log_* params)
+        if chem_mode in ['fastchem_live', 'fastchem_grid']:
+            if 'line_species' in chemistry_kwargs:
+                line_species = chemistry_kwargs['line_species']
+                line_species = convert_line_species_to_pRT(line_species, species_info_path, debug)
+                if debug:
+                    print(f"[atmosphere/make_spectrum.py/pRT_spectrum] Using line_species from chemistry_kwargs for {chem_mode} mode: {line_species}")
+            else:
+                # Fallback to line_species from log_* params if no line_species in chemistry_kwargs
+                line_species = line_species_from_params
+                if debug:
+                    print(f"[atmosphere/make_spectrum.py/pRT_spectrum] No line_species in chemistry_kwargs for {chem_mode} mode, using from log_* params: {line_species}")
+        # For equilibrium chemistry, if line_species is empty (no log_* params),
+        # try to get from chemistry_kwargs
+        # Note: If still empty, EquilibriumChemistry.get_VMRs() will automatically
+        # extract all available species from pRT interpolation table
+        elif chem_mode == 'equilibrium':
+            if len(line_species_from_params) == 0:
+                # Check if line_species is explicitly provided in chemistry_kwargs
+                if 'line_species' in chemistry_kwargs:
+                    line_species = chemistry_kwargs['line_species']
+                    line_species = convert_line_species_to_pRT(line_species, species_info_path, debug)
+                else:
+                    line_species = []
+                    if debug:
+                        print(f"[atmosphere/make_spectrum.py/pRT_spectrum] No line_species found. "
+                              f"EquilibriumChemistry will automatically extract available species from pRT table.")
+            else:
+                line_species = line_species_from_params
+        else:
+            # For 'free' chemistry mode, use line_species from log_* params
+            line_species = line_species_from_params
+        
+        # Remove line_species from chemistry_kwargs to avoid duplicate argument error
+        # (line_species is already passed as a separate argument)
+        chemistry_kwargs_for_init = chemistry_kwargs.copy()
+        chemistry_kwargs_for_init.pop('line_species', None)
         
         self.chemistry = get_chemistry_class(
             pressure=self.pressure,
             line_species=line_species,
-            **chemistry_kwargs
+            **chemistry_kwargs_for_init
         )
 
         # ===== Build atmosphere state using TP_profile and Chemistry classes =====
@@ -141,6 +247,23 @@ class pRT_spectrum:
         self.CO = self.chemistry.CO
         self.FeH = self.chemistry.FeH
         self.MMW = self.mass_fractions["MMW"]
+        
+        # ===== Get cloud_kwargs from parameters object (loaded from config file) =====
+        cloud_kwargs = parameters.cloud_kwargs.copy() if hasattr(parameters, 'cloud_kwargs') and parameters.cloud_kwargs else {}
+        
+        # Set default cloud_kwargs if empty (no cloud)
+        if not cloud_kwargs:
+            cloud_kwargs = {
+                'cloud_mode': None,  # No cloud by default
+            }
+            if debug:
+                print("[atmosphere/make_spectrum.py/pRT_spectrum] No cloud_kwargs provided. Using default: no cloud.")
+        else:
+            if debug:
+                print("[atmosphere/make_spectrum.py/pRT_spectrum] cloud_kwargs provided: 'cloud_mode': {}.".format(cloud_kwargs.get('cloud_mode')))
+        
+        # Initialize cloud object
+        self.cloud = get_cloud_class(pressure=self.pressure, **cloud_kwargs)
 
     # ========== Spectrum synthesis ==========
     def make_spectrum(self):
@@ -153,12 +276,23 @@ class pRT_spectrum:
     
     def _make_spectrum_single(self):
         """Original single spectrum processing (backward compatible)."""
+        # --- Update cloud model with current parameters ---
+        # Calculate mean wavelength for cloud opacity calculation (optional)
+        mean_wave_micron = np.nanmean(self.data_wave) * 1e-3 if hasattr(self.data_wave, '__len__') else None
+        self.cloud(self.params, mean_wave_micron=mean_wave_micron)
+        
+        # Get cloud opacity functions (if available)
+        cloud_abs_opacity = getattr(self.cloud, 'abs_opacity', None)
+        cloud_scat_opacity = getattr(self.cloud, 'scat_opacity', None)
+        
         # --- pRT forward model, which returns a pRT atmosphere object ---
         wl, flux, _ = self.atmosphere.calculate_flux(  # in cm
             temperatures=self.temperature,
             mass_fractions=self.mass_fractions,
             reference_gravity=self.gravity,
             mean_molar_masses=self.MMW,
+            additional_absorption_opacities_function=cloud_abs_opacity,
+            additional_scattering_opacities_function=cloud_scat_opacity,
             return_contribution=self.contribution,
             frequencies_to_wavelengths=True,
         )
@@ -166,7 +300,25 @@ class pRT_spectrum:
         wl *= 1e7  # cm → nm
 
         if self.normalize:
-            flux /= np.nanmedian(flux)  # normalize to median flux
+            # Apply normalization based on normalize_method
+            if self.normalize_method == 'simplistic_normalization':
+                # Use normalization function from utils.normalization
+                flux = simplistic_normalization(flux, err=None)
+            elif self.normalize_method == 'low-resolution':
+                # Use normalization function from utils.normalization
+                flux = low_resolution_normalization(wl, flux, err=None, out_res=100)
+            elif self.normalize_method == 'median_highpass':
+                # Use normalization function from utils.normalization
+                flux = median_highpass_normalization(wl, flux, err=None, window=100)
+            elif self.normalize_method == 'gaussian_lfp':
+                # Use normalization function from utils.normalization
+                flux = gaussian_lfp(wl, flux, err=None, sigma_px=100)
+            elif self.normalize_method == 'savgol_lfp':
+                # Use normalization function from utils.normalization
+                flux = savgol_lfp(wl, flux, err=None, window_length=1301, polyorder=2)
+            else:
+                raise ValueError(f"Unknown normalize_method: {self.normalize_method}. "
+                               f"Must be one of: 'simplistic_normalization', 'low-resolution', 'median_highpass'")
 
         # --- Barycentric + RV shift ---
         # Extract RA and Dec values (type checker safety)
@@ -240,12 +392,25 @@ class pRT_spectrum:
             jd=self.target.JD,
         )
         
+        # --- Update cloud model with current parameters ---
+        # Calculate mean wavelength for cloud opacity calculation (optional)
+        # Use mean of all chips' wavelengths
+        all_wavelengths = np.concatenate(self.data_wave) if isinstance(self.data_wave, list) else self.data_wave
+        mean_wave_micron = np.nanmean(all_wavelengths) * 1e-3 if len(all_wavelengths) > 0 else None
+        self.cloud(self.params, mean_wave_micron=mean_wave_micron)
+        
+        # Get cloud opacity functions (if available)
+        cloud_abs_opacity = getattr(self.cloud, 'abs_opacity', None)
+        cloud_scat_opacity = getattr(self.cloud, 'scat_opacity', None)
+        
         # --- Calculate full spectrum once (covering all chips) ---
         wl_full, flux_full, _ = self.atmosphere.calculate_flux(  # in cm
             temperatures=self.temperature,
             mass_fractions=self.mass_fractions,
             reference_gravity=self.gravity,
             mean_molar_masses=self.MMW,
+            additional_absorption_opacities_function=cloud_abs_opacity,
+            additional_scattering_opacities_function=cloud_scat_opacity,
             return_contribution=self.contribution,
             frequencies_to_wavelengths=True,
         )
@@ -267,7 +432,25 @@ class pRT_spectrum:
             
             # --- Normalize this chip ---
             if self.normalize:
-                flux_chip /= np.nanmedian(flux_chip)  # normalize to median flux of this chip
+                # Apply normalization based on normalize_method
+                if self.normalize_method == 'simplistic_normalization':
+                    # Use normalization function from utils.normalization
+                    flux_chip = simplistic_normalization(flux_chip, err=None)
+                elif self.normalize_method == 'low-resolution':
+                    # Use normalization function from utils.normalization
+                    flux_chip = low_resolution_normalization(wl_chip, flux_chip, err=None, out_res=100)
+                elif self.normalize_method == 'median_highpass':
+                    # Use normalization function from utils.normalization
+                    flux_chip = median_highpass_normalization(wl_chip, flux_chip, err=None, window=100)
+                elif self.normalize_method == 'gaussian_lfp':
+                    # Use normalization function from utils.normalization
+                    flux_chip = gaussian_lfp(wl_chip, flux_chip, err=None, sigma_px=100)
+                elif self.normalize_method == 'savgol_lfp':
+                    # Use normalization function from utils.normalization
+                    flux_chip = savgol_lfp(wl_chip, flux_chip, err=None, window_length=1301, polyorder=2)
+                else:
+                    raise ValueError(f"Unknown normalize_method: {self.normalize_method}. "
+                                   f"Must be one of: 'simplistic_normalization', 'low-resolution', 'median_highpass'")
             
             # --- Barycentric + RV shift (apply to this chip) ---
             wl_shifted_chip = wl_chip * (1 + (self.params["rv"] - v_bary) / getattr(const, 'c').to("km/s").value)
