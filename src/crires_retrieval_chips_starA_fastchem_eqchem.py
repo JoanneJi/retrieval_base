@@ -49,19 +49,21 @@ def main():
         # dets=[1],
         normalize=normalize_flag,
         normalize_method=normalize_method,
-        remove_metal_lines=False  # keep metal line regions for fastchem calculation
+        remove_metal_lines=False,  # keep metal line regions for fastchem calculation
+        concatenate_dets=True,  # get low-res normalization using all dets per order
     )
 
     # # plot the normalized spectrum
     # import matplotlib.pyplot as plt
     # import numpy as np
-    # print(np.shape(wave_chips), np.shape(flux_chips), np.shape(err_chips))
-    # print(np.shape(wave[np.ix_([4],[1])][0][0]), np.shape(flux[np.ix_([4],[1])]), np.shape(err[np.ix_([4],[1])]))
+    # # print(np.shape(wave_chips), np.shape(flux_chips), np.shape(err_chips))
+    # # print(np.shape(wave[np.ix_([4],[1])][0][0]), np.shape(flux[np.ix_([4],[1])]), np.shape(err[np.ix_([4],[1])]))
     # plt.figure(figsize=(10, 5))
-    # plt.errorbar(
-    #         wave_chips[0], flux_chips[0], yerr=err_chips[0],
-    #         fmt='o', alpha=0.8, markersize=0.5, elinewidth=0.5,
-    #     )
+    # for i in range(len(wave_chips)):
+    #     plt.errorbar(
+    #             wave_chips[i], flux_chips[i], yerr=err_chips[i],
+    #             fmt='o', alpha=0.8, markersize=0.5, elinewidth=0.5,
+    #         )
     # plt.savefig(f"CD-35_2722_spectrum_{prefix_crires}.pdf")
 
     # 4. Create target object in chips_mode
@@ -69,7 +71,8 @@ def main():
         wl=wave_chips, fl=flux_chips, err=err_chips,
         name="CD-35 2722", JD=2459945.58464374,
         ra="06h09m19.2081174720s", dec="-35d49m31.065774636s",
-        chips_mode=True  # Enable chips mode
+        chips_mode=True,  # Enable chips mode
+        chips_per_order=len([0, 1, 2]),  # number of detectors per order, provide this if you want to normalize by order instead of by det/chip
     )
 
     # 5. load parameters & run retrieval

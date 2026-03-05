@@ -189,3 +189,4 @@ def savgol_lfp(wave, flux, err=None, window_length=1301, polyorder=2):
         return flux_norm, err_norm
 
     return flux_norm
+

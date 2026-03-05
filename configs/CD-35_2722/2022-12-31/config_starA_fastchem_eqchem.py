@@ -59,16 +59,16 @@ free_params = {
 
     # ----- radial velocity & surface gravity -----
     'rv': ([0, 40], r'$v_{\rm rad}$', 'uniform'),  # radial velocity [km/s]
-    # 'log_g': ([3, 5.5], r'log $g$', 'uniform'),  # log10 of surface gravity [cm/s^2]
-    'log_g': ([4.3, 0.3], r'log $g$', 'normal'),  # log10 of surface gravity [cm/s^2]
+    'log_g': ([3.5, 5.5], r'log $g$', 'uniform'),  # log10 of surface gravity [cm/s^2]
+    # 'log_g': ([4.3, 0.3], r'log $g$', 'normal'),  # log10 of surface gravity [cm/s^2]
 
     # ----- temperature profile -----
     # case 1: 5 temperature knots -> T0, T1, T2, T3, T4
-    'T_0' : ([3000,12000], r'$T_0$', 'uniform'), # bottom of the atmosphere (usually hotter)
+    'T_0' : ([3000,15000], r'$T_0$', 'uniform'), # bottom of the atmosphere (usually hotter)
     'T_1' : ([3000,5000], r'$T_1$', 'uniform'),
-    'T_2' : ([0,5000], r'$T_2$', 'uniform'),
-    'T_3' : ([0,5000], r'$T_3$', 'uniform'),
-    'T_4' : ([0,5000], r'$T_4$', 'uniform'), # top of atmosphere (usually cooler)
+    'T_2' : ([1000,5000], r'$T_2$', 'uniform'),
+    'T_3' : ([1000,5000], r'$T_3$', 'uniform'),
+    'T_4' : ([1000,5000], r'$T_4$', 'uniform'), # top of atmosphere (usually cooler)
     # # case 2: 5 temperature gradients -> dlnT_dlnP_{i} (for TP_mode='gradient')
     # # Note: Also need T_phot or T_0 in constant_params as base temperature
     # 'dlnT_dlnP_0' : ([0,0.1], r'$\frac{d\ln T}{d\ln P}_0$', 'uniform'), # bottom of the atmosphere (usually hotter)
@@ -148,9 +148,10 @@ chemistry_kwargs = dict(
     #     b) pRT names (e.g., ['1H2-16O', '12C-16O', '12C-1H4'])
     #   - The code will automatically convert species_info names to pRT names if needed
     #   - To match free chemistry config (config_starB_7mol_free.py), use species_info names:
-    line_species = ['Na', 'Ca', 'HF', '12CO', '13CO', 'H2O', 'OH', 'CN', 'TiO', 'Sc', 'H2_lines', 'Fe'],  # modified version under higher temperature
+    line_species = ['Na', 'Ca', 'HF', '12CO', '13CO', 'H2O', 'OH', 'CN', 'TiO', 'Sc', 'Fe', 'Ti'],  # modified version under higher temperature, without He and H2
     # species I want to save into the VMR file -- name in species_info.csv
-    save_species = ['Na', 'Ca', 'HF', '12CO', 'H2O', 'OH', 'CN', 'TiO', 'e-', 'H', 'H1-', '13CO', 'Sc', 'Fe']
+    save_species = ['Na', 'Ca', 'HF', '12CO', '13CO', 'H2O', 'OH', 'CN', 'TiO', 'Sc', 'e-', 'H', 'H1-', 'Fe', 'Ti', 'He', 'H2']  # should include H2 and He
+    # save_species = ['Na', 'Ca', 'HF', '12CO', '13CO', 'H2O', 'OH', 'CN', 'TiO', 'Sc', 'e-', 'H', 'H1-', 'Fe', 'Ti']
     
     # LineOpacity: Custom line opacity objects (list of opacity objects).
     #   - If None or not specified: no custom line opacities are used

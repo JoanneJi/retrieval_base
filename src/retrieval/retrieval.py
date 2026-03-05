@@ -984,9 +984,8 @@ class Retrieval:
             print(f"[retrieval.py/Retrieval._compute_vmr_errors] Warning: VMRs is None or not a dict.")
             return None
         
+        # Start from all species in current VMRs; MMW will be handled separately
         species_list = list(current_vmrs.keys())
-        # Filter out H2, He (MMW will be handled separately from chemistry.MMW attribute)
-        species_list = [s for s in species_list if s not in ['H2', 'He']]
         
         # Check if MMW should be computed (from chemistry.MMW attribute)
         include_mmw = False
@@ -1148,8 +1147,8 @@ class Retrieval:
             else:
                 print(f"[retrieval.py/Retrieval._save_vmr_profile] Warning: Could not compute VMR errors. Saving without errors.")
         
-        # Filter out H2, He --> MMW should be saved in the vmr.dat file
-        species_list = [s for s in vmrs.keys() if s not in ['H2', 'He']]
+        # Include all species present in VMRs; MMW will be handled separately
+        species_list = list(vmrs.keys())
         
         # Check if MMW should be added (from chemistry.MMW attribute, not from VMRs dict)
         include_mmw = False

@@ -76,7 +76,17 @@ def select_order_and_flatten(wave, flux, err, orders, dets, normalize=True):
 
     return wave, flux, err
 
-def select_orders_chips(wave, flux, err, orders, dets, normalize=True, normalize_method='simplistic_normalization', remove_metal_lines=False):
+def select_orders_chips(
+    wave,
+    flux,
+    err,
+    orders,
+    dets,
+    normalize=True,
+    normalize_method='simplistic_normalization',
+    remove_metal_lines=False,
+    concatenate_dets=False,
+):
     """
     Select specific orders and detectors, keeping the chip structure (not flattened).
     Each (order, det) combination becomes a chip.
@@ -95,6 +105,9 @@ def select_orders_chips(wave, flux, err, orders, dets, normalize=True, normalize
             - 'median_highpass': divide by median-filtered low-frequency component
             - 'gaussian_lfp': divide by Gaussian-filtered low-frequency component
             - 'savgol_lfp': divide by Savgol-filtered low-frequency component
+        concatenate_dets (bool): if True and normalize_method == 'low-resolution',
+            compute the low-resolution continuum by concatenating all detectors
+            within each order, then split back to per-detector chips.
         remove_metal_lines (bool): whether to remove the metal line regions. Default is False.
     Returns:
         wave_chips (list): list of wavelength arrays, one per chip, shape (n_chips, n_pixels_per_chip)
@@ -120,6 +133,11 @@ def select_orders_chips(wave, flux, err, orders, dets, normalize=True, normalize
     err_chips = []
     
     for i in range(n_orders):
+        # First collect cleaned chips for this order
+        order_wave_chips = []
+        order_flux_chips = []
+        order_err_chips = []
+
         for j in range(n_dets):
             # Remove bad pixels for this (order, det) combination
             # firstly remove the NaN/inf, and negative flux
@@ -142,7 +160,42 @@ def select_orders_chips(wave, flux, err, orders, dets, normalize=True, normalize
             
             # Only keep chips with valid data
             if len(wave_chip) > 0:
-                # Apply normalization to cleaned data if requested
+                order_wave_chips.append(wave_chip)
+                order_flux_chips.append(flux_chip)
+                order_err_chips.append(err_chip)
+
+        # If no valid chips in this order, skip
+        if len(order_wave_chips) == 0:
+            continue
+
+        # Apply normalization if requested
+        if normalize and normalize_method == 'low-resolution' and concatenate_dets:
+            # Concatenate all detectors within this order to compute a shared
+            # low-resolution continuum, then split back to per-detector chips.
+            wl_all = np.concatenate(order_wave_chips)
+            f_all = np.concatenate(order_flux_chips)
+            e_all = np.concatenate(order_err_chips)
+
+            f_all_norm, e_all_norm = low_resolution_normalization(
+                wl_all, f_all, e_all, out_res=150
+            )
+
+            # Split back into per-detector chips
+            start = 0
+            for wave_chip in order_wave_chips:
+                n_pix = len(wave_chip)
+                flux_chip = f_all_norm[start:start + n_pix]
+                err_chip = e_all_norm[start:start + n_pix]
+                start += n_pix
+
+                wave_chips.append(wave_chip)
+                flux_chips.append(flux_chip)
+                err_chips.append(err_chip)
+        else:
+            # Per-chip normalization (or no normalization)
+            for wave_chip, flux_chip, err_chip in zip(
+                order_wave_chips, order_flux_chips, order_err_chips
+            ):
                 if normalize:
                     if normalize_method == 'simplistic_normalization':
                         # For 1D array, normalize by median
@@ -151,10 +204,13 @@ def select_orders_chips(wave, flux, err, orders, dets, normalize=True, normalize
                             flux_chip = flux_chip / median
                             err_chip = err_chip / median
                         else:
-                            raise ValueError(f"Normalization failed for chip ({i}, {j}): zero or non-finite median encountered.")
+                            raise ValueError(
+                                f"Normalization failed for chip in order {i}: "
+                                "zero or non-finite median encountered."
+                            )
                     elif normalize_method == 'low-resolution':
                         flux_chip, err_chip = low_resolution_normalization(
-                            wave_chip, flux_chip, err_chip, out_res=100
+                            wave_chip, flux_chip, err_chip, out_res=150
                         )
                     elif normalize_method == 'median_highpass':
                         flux_chip, err_chip = median_highpass_normalization(
@@ -169,9 +225,12 @@ def select_orders_chips(wave, flux, err, orders, dets, normalize=True, normalize
                             wave_chip, flux_chip, err_chip, window_length=1301, polyorder=2
                         )
                     else:
-                        raise ValueError(f"Unknown normalize_method: {normalize_method}. "
-                                       f"Must be one of: 'simplistic_normalization', 'low-resolution', 'median_highpass', 'gaussian_lfp'")
-                
+                        raise ValueError(
+                            f"Unknown normalize_method: {normalize_method}. "
+                            "Must be one of: 'simplistic_normalization', 'low-resolution', "
+                            "'median_highpass', 'gaussian_lfp', 'savgol_lfp'"
+                        )
+
                 wave_chips.append(wave_chip)
                 flux_chips.append(flux_chip)
                 err_chips.append(err_chip)

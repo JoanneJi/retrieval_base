@@ -62,6 +62,9 @@ class pRT_spectrum:
         self.normalize_method = normalize_method
         self.contribution = contribution
         self.debug = debug
+        # Optional: number of chips per order (e.g. 3 detectors per order)
+        # Only relevant in chips_mode
+        self.chips_per_order = getattr(target, 'chips_per_order', None)
 
         # Atmosphere setup
         # Radtrans stores pressure in CGS units (dyn/cm²), but we need bar for TP_profile and Chemistry
@@ -285,10 +288,13 @@ class pRT_spectrum:
         cloud_abs_opacity = getattr(self.cloud, 'abs_opacity', None)
         cloud_scat_opacity = getattr(self.cloud, 'scat_opacity', None)
         
+        # remove MMW from mass_fractions
+        mass_fractions_no_mmw = self.mass_fractions.copy()
+        mass_fractions_no_mmw.pop('MMW')
         # --- pRT forward model, which returns a pRT atmosphere object ---
         wl, flux, _ = self.atmosphere.calculate_flux(  # in cm
             temperatures=self.temperature,
-            mass_fractions=self.mass_fractions,
+            mass_fractions=mass_fractions_no_mmw,
             reference_gravity=self.gravity,
             mean_molar_masses=self.MMW,
             additional_absorption_opacities_function=cloud_abs_opacity,
@@ -296,6 +302,27 @@ class pRT_spectrum:
             return_contribution=self.contribution,
             frequencies_to_wavelengths=True,
         )
+
+        # if debug, print continuum contribution from H- and CIA
+        if self.debug:
+            hminus = self.atmosphere._compute_h_minus_opacities(
+                mass_fractions=mass_fractions_no_mmw,
+                pressures=self.pressure,
+                temperatures=self.temperature,
+                frequencies=self.atmosphere._frequencies,
+                frequency_bins_edges=self.atmosphere._frequency_bins_edges,
+                mean_molar_masses=self.MMW,
+            )
+            print(f"[DEBUG make_spectrum] Continuum contribution from H- [cm^2/g]: mean={np.mean(hminus)}, min={hminus.min():.2e}, max={hminus.max():.2e}")
+            cia_opacities = self.atmosphere._compute_cia_opacities(
+                cia_dicts=self.atmosphere._cias_loaded_opacities,
+                mass_fractions=mass_fractions_no_mmw,
+                pressures=self.pressure,
+                temperatures=self.temperature,
+                frequencies=self.atmosphere._frequencies,
+                mean_molar_masses=self.MMW,
+            )
+            print(f"[DEBUG make_spectrum] Continuum contribution from CIA [cm^2/g]: mean={np.mean(cia_opacities)}, min={cia_opacities.min():.2e}, max={cia_opacities.max():.2e}")
 
         wl *= 1e7  # cm → nm
 
@@ -403,10 +430,13 @@ class pRT_spectrum:
         cloud_abs_opacity = getattr(self.cloud, 'abs_opacity', None)
         cloud_scat_opacity = getattr(self.cloud, 'scat_opacity', None)
         
+        # remove MMW from mass_fractions
+        mass_fractions_no_mmw = self.mass_fractions.copy()
+        mass_fractions_no_mmw.pop('MMW')
         # --- Calculate full spectrum once (covering all chips) ---
         wl_full, flux_full, _ = self.atmosphere.calculate_flux(  # in cm
             temperatures=self.temperature,
-            mass_fractions=self.mass_fractions,
+            mass_fractions=mass_fractions_no_mmw,
             reference_gravity=self.gravity,
             mean_molar_masses=self.MMW,
             additional_absorption_opacities_function=cloud_abs_opacity,
@@ -414,13 +444,37 @@ class pRT_spectrum:
             return_contribution=self.contribution,
             frequencies_to_wavelengths=True,
         )
+
+        # if debug, print continuum contribution from H- and CIA
+        if self.debug:
+            hminus = self.atmosphere._compute_h_minus_opacities(
+                mass_fractions=mass_fractions_no_mmw,
+                pressures=self.pressure,
+                temperatures=self.temperature,
+                frequencies=self.atmosphere._frequencies,
+                frequency_bins_edges=self.atmosphere._frequency_bins_edges,
+                mean_molar_masses=self.MMW,
+            )
+            print(f"[DEBUG make_spectrum] Continuum contribution from H- [cm^2/g]: mean={np.mean(hminus)}, min={hminus.min():.2e}, max={hminus.max():.2e}")
+            cia_opacities = self.atmosphere._compute_cia_opacities(
+                cia_dicts=self.atmosphere._cias_loaded_opacities,
+                mass_fractions=mass_fractions_no_mmw,
+                pressures=self.pressure,
+                temperatures=self.temperature,
+                frequencies=self.atmosphere._frequencies,
+                mean_molar_masses=self.MMW,
+            )
+            print(f"[DEBUG make_spectrum] Continuum contribution from CIA [cm^2/g]: mean={np.mean(cia_opacities)}, min={cia_opacities.min():.2e}, max={cia_opacities.max():.2e}")
         
         wl_full *= 1e7  # cm → nm
         
-        # --- Process each chip separately to avoid processing gap regions ---
-        model_flux_chips = []
-
-        for i, data_wave_i in enumerate(self.data_wave):
+        # --- Process each chip: first extract chip segments, then normalize, then broaden ---
+        n_chips = len(self.data_wave)
+        chip_wl = []
+        chip_flux = []
+        
+        # 1) Extract chip segments from full spectrum (no normalization yet)
+        for i in range(n_chips):
             # Get wavelength range for this chip (with padding for extraction)
             wlmin_chip = wave_ranges_chips[i, 0] - wl_pad
             wlmax_chip = wave_ranges_chips[i, 1] + wl_pad
@@ -430,28 +484,76 @@ class pRT_spectrum:
             wl_chip = wl_full[mask_chip]
             flux_chip = flux_full[mask_chip]
             
-            # --- Normalize this chip ---
-            if self.normalize:
-                # Apply normalization based on normalize_method
-                if self.normalize_method == 'simplistic_normalization':
-                    # Use normalization function from utils.normalization
-                    flux_chip = simplistic_normalization(flux_chip, err=None)
-                elif self.normalize_method == 'low-resolution':
-                    # Use normalization function from utils.normalization
-                    flux_chip = low_resolution_normalization(wl_chip, flux_chip, err=None, out_res=100)
-                elif self.normalize_method == 'median_highpass':
-                    # Use normalization function from utils.normalization
-                    flux_chip = median_highpass_normalization(wl_chip, flux_chip, err=None, window=100)
-                elif self.normalize_method == 'gaussian_lfp':
-                    # Use normalization function from utils.normalization
-                    flux_chip = gaussian_lfp(wl_chip, flux_chip, err=None, sigma_px=100)
-                elif self.normalize_method == 'savgol_lfp':
-                    # Use normalization function from utils.normalization
-                    flux_chip = savgol_lfp(wl_chip, flux_chip, err=None, window_length=1301, polyorder=2)
-                else:
-                    raise ValueError(f"Unknown normalize_method: {self.normalize_method}. "
-                                   f"Must be one of: 'simplistic_normalization', 'low-resolution', 'median_highpass'")
-            
+            chip_wl.append(wl_chip)
+            chip_flux.append(flux_chip)
+
+        # 2) Normalize chips (either per-chip or per-order with concatenated detectors)
+        if self.normalize:
+            if self.normalize_method == 'low-resolution' and self.chips_per_order is not None:
+                # Order-level low-resolution normalization:
+                # concatenate all detectors within each order, compute continuum,
+                # then split back to per-chip spectra (mirrors data preprocessing).
+                cpo = int(self.chips_per_order)
+                for start_idx in range(0, n_chips, cpo):
+                    end_idx = min(start_idx + cpo, n_chips)
+                    # Concatenate wavelengths and fluxes for this order
+                    wl_all = np.concatenate(chip_wl[start_idx:end_idx])
+                    f_all = np.concatenate(chip_flux[start_idx:end_idx])
+
+                    f_all_norm = low_resolution_normalization(
+                        wl_all, f_all, err=None, out_res=100
+                    )
+
+                    # Split normalized flux back to each chip in this order
+                    offset = 0
+                    for idx in range(start_idx, end_idx):
+                        n_pix = len(chip_wl[idx])
+                        chip_flux[idx] = f_all_norm[offset:offset + n_pix]
+                        offset += n_pix
+            else:
+                # Per-chip normalization (original behavior)
+                if self.normalize_method == 'low-resolution' and self.chips_per_order is None:
+                    warnings.warn(
+                        "[pRT_spectrum._make_spectrum_chips] chips_per_order is None; "
+                        "applying low-resolution normalization per chip instead of per order."
+                        "Check whether the data is also normalized per chip."
+                    )
+                for i in range(n_chips):
+                    wl_chip = chip_wl[i]
+                    flux_chip = chip_flux[i]
+
+                    if self.normalize_method == 'simplistic_normalization':
+                        flux_chip = simplistic_normalization(flux_chip, err=None)
+                    elif self.normalize_method == 'low-resolution':
+                        flux_chip = low_resolution_normalization(
+                            wl_chip, flux_chip, err=None, out_res=100
+                        )
+                    elif self.normalize_method == 'median_highpass':
+                        flux_chip = median_highpass_normalization(
+                            wl_chip, flux_chip, err=None, window=100
+                        )
+                    elif self.normalize_method == 'gaussian_lfp':
+                        flux_chip = gaussian_lfp(
+                            wl_chip, flux_chip, err=None, sigma_px=100
+                        )
+                    elif self.normalize_method == 'savgol_lfp':
+                        flux_chip = savgol_lfp(
+                            wl_chip, flux_chip, err=None, window_length=1301, polyorder=2
+                        )
+                    else:
+                        raise ValueError(
+                            f"Unknown normalize_method: {self.normalize_method}. "
+                            "Must be one of: 'simplistic_normalization', 'low-resolution', 'median_highpass'"
+                        )
+
+                    chip_flux[i] = flux_chip
+
+        # 3) Apply RV shift, rotation, instrumental broadening and regrid per chip
+        model_flux_chips = []
+        for i, data_wave_i in enumerate(self.data_wave):
+            wl_chip = chip_wl[i]
+            flux_chip = chip_flux[i]
+
             # --- Barycentric + RV shift (apply to this chip) ---
             wl_shifted_chip = wl_chip * (1 + (self.params["rv"] - v_bary) / getattr(const, 'c').to("km/s").value)
             

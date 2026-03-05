@@ -801,11 +801,12 @@ def plot_vmr_profile(
     # Default color cycle (use matplotlib's default)
     default_colors = plt.cm.tab10(np.linspace(0, 1, 10))
     
-    # Filter out H2 and He from plotting (they're usually dominant and less interesting)
-    species_to_plot = [s for s in vmrs_dict.keys() if s not in ['H2', 'He', 'MMW']]
+    # Filter out only MMW from plotting; include H2 and He so that
+    # their contributions to the VMR profile are visible if desired.
+    species_to_plot = [s for s in vmrs_dict.keys() if s != 'MMW']
     
     if len(species_to_plot) == 0:
-        warnings.warn("No species to plot (excluding H2, He, MMW).")
+        warnings.warn("No species to plot (only MMW found).")
         plt.close(fig)
         return None
     

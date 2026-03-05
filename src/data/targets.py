@@ -20,7 +20,19 @@ class Target:
     No instrument-specific logic, no normalization or reshaping.
     """
 
-    def __init__(self, wl, fl, err, name, JD, ra=None, dec=None, color="limegreen", chips_mode=False):
+    def __init__(
+        self,
+        wl,
+        fl,
+        err,
+        name,
+        JD,
+        ra=None,
+        dec=None,
+        color="limegreen",
+        chips_mode=False,
+        chips_per_order=None,
+    ):
         """
         Initialize Target object.
         
@@ -35,6 +47,10 @@ class Target:
             ra, dec: right ascension and declination (optional)
             color: color for plotting
             chips_mode: if True, expects wl/fl/err as lists of arrays (one per chip)
+            chips_per_order: (optional) number of chips per order, if the chips
+                are grouped by diffraction order (e.g., 3 detectors per order
+                for CRIRES+). Used for order-level operations such as shared
+                normalization patterns.
         """
         self.chips_mode = chips_mode
         
@@ -59,6 +75,8 @@ class Target:
             # Calculate wave_ranges_chips
             self.wave_ranges_chips = np.array([[w.min(), w.max()] for w in self.wl])
             self.n_chips = len(self.wl)
+            # Optional: number of chips per order (e.g. 3 detectors per order)
+            self.chips_per_order = chips_per_order
             
             # Create flattened versions for backward compatibility
             self.wl_flat = np.concatenate(self.wl)

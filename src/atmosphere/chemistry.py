@@ -1249,30 +1249,13 @@ class FastChemistry_Live(EquilibriumChemistry):
         FastChem uses Hill notation (e.g., 'C1O1' for CO, 'H2O1' for H2O).
         """
         self.hill = {}
-        # Special mappings for atoms that use diatomic notation in FastChem
-        # FastChem uses Na2, Ca2 for atomic Na and Ca (diatomic form)
-        atom_to_diatomic = {
-            'Na': 'Na2',
-            'Ca': 'Ca2',
-        }
         
-        for species_i in self.species:
-            # Check for special atom mappings first
-            if species_i in atom_to_diatomic:
-                self.hill[species_i] = atom_to_diatomic[species_i]
-                continue
-            
+        for species_i in self.species:            
             # Try to get Hill notation from species_info
             if 'Hill_notation' in self.species_info.columns:
                 hill_i = self.species_info.loc[species_i, 'Hill_notation']
                 if pd.notna(hill_i) and hill_i != '':
-                    # For atoms (Na, Ca), FastChem uses diatomic form (Na2, Ca2)
-                    if hill_i == 'Na':
-                        self.hill[species_i] = 'Na2'
-                    elif hill_i == 'Ca':
-                        self.hill[species_i] = 'Ca2'
-                    else:
-                        self.hill[species_i] = str(hill_i)
+                    self.hill[species_i] = str(hill_i)
                     continue
             
             # If no Hill_notation column, try to convert from pRT_name or species name
@@ -1355,8 +1338,6 @@ class FastChemistry_Live(EquilibriumChemistry):
             'Ti1O1': 'TiO',
             'V1O1': 'VO',
             'Fe1H1': 'FeH',
-            'Na2': 'Na',  # FastChem uses Na2 for atomic Na
-            'Ca2': 'Ca',  # FastChem uses Ca2 for atomic Ca
             'Na': 'Na',
             'Ca': 'Ca',
             'K': 'K',
@@ -1398,13 +1379,8 @@ class FastChemistry_Live(EquilibriumChemistry):
             hill_i = self.species_info.loc[species_name, 'Hill_notation']
             if pd.notna(hill_i) and hill_i != '':
                 hill_i = str(hill_i)
-                # Handle special cases for atoms
-                if hill_i == 'Na':
-                    return 'Na2'
-                elif hill_i == 'Ca':
-                    return 'Ca2'
-                else:
-                    return hill_i
+                # Return the Hill notation directly from species_info
+                return hill_i
         
         # Try conversion
         hill_i = self._convert_to_hill_notation(species_name)
@@ -1862,16 +1838,20 @@ class FastChemistry_Live(EquilibriumChemistry):
             idx_H2 = self.fastchem.getGasSpeciesIndex('H2')
             if idx_H2 < self.gas_species_tot:
                 self.VMRs['H2'] = (n[:, idx_H2] / n_tot)[::-1]
+                # print(f"[Chemistry.get_VMRs] H2 VMR: min={self.VMRs['H2'].min():.2e}, max={self.VMRs['H2'].max():.2e}")
             else:
                 VMR_wo_H2 = np.sum([VMR_i for VMR_i in self.VMRs.values()], axis=0)
                 self.VMRs['H2'] = np.clip(1 - VMR_wo_H2, 0, 1)
+                warnings.warn(f"[Chemistry.get_VMRs] H2 is not in the VMR dictionary, but it is in the FastChem library. Setting H2 VMR to 1 - sum of other VMRs.")
         
         if 'He' not in self.VMRs:
             idx_He = self.fastchem.getGasSpeciesIndex('He')
             if idx_He < self.gas_species_tot:
                 self.VMRs['He'] = (n[:, idx_He] / n_tot)[::-1]
+                # print(f"[Chemistry.get_VMRs] He VMR: min={self.VMRs['He'].min():.2e}, max={self.VMRs['He'].max():.2e}")
             else:
                 self.VMRs['He'] = 0.15 * np.ones(self.n_atm_layers)
+                warnings.warn(f"[Chemistry.get_VMRs] He is not in the VMR dictionary, but it is in the FastChem library. Setting He VMR to 0.15.")
         
         # Handle zero abundances (set to minimum value)
         for species_i, VMR_i in self.VMRs.items():
