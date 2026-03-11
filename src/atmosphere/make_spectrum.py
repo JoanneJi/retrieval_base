@@ -2,6 +2,7 @@ from typing import Any
 
 import numpy as np
 import warnings
+import matplotlib.pyplot as plt
 
 from astropy.coordinates import SkyCoord
 from astropy import constants as const
@@ -272,10 +273,26 @@ class pRT_spectrum:
     def make_spectrum(self):
         if self.chips_mode:
             # Multi-chip mode: process each chip separately
-            return self._make_spectrum_chips()
+            model_flux = self._make_spectrum_chips()
         else:
             # Single spectrum mode (original behavior, backward compatible)
-            return self._make_spectrum_single()
+            model_flux = self._make_spectrum_single()
+
+        # Optional diagnostic plot: compare model flux and data flux on the same wavelength grid
+        if self.debug:
+            data_wl = self.target.wl_flat
+            data_fl = self.target.fl_flat
+
+            plt.figure(figsize=(10, 4))
+            plt.plot(data_wl, data_fl, label="data", alpha=0.7, color='black')
+            plt.plot(data_wl, model_flux, label="model", alpha=0.7, color='red')
+            plt.xlabel("Wavelength [nm]")
+            plt.ylabel("Flux")
+            plt.legend()
+            plt.tight_layout()
+            plt.savefig("created_atmosphere_object.pdf")
+
+        return model_flux
     
     def _make_spectrum_single(self):
         """Original single spectrum processing (backward compatible)."""
@@ -325,28 +342,7 @@ class pRT_spectrum:
             print(f"[DEBUG make_spectrum] Continuum contribution from CIA [cm^2/g]: mean={np.mean(cia_opacities)}, min={cia_opacities.min():.2e}, max={cia_opacities.max():.2e}")
 
         wl *= 1e7  # cm → nm
-
-        if self.normalize:
-            # Apply normalization based on normalize_method
-            if self.normalize_method == 'simplistic_normalization':
-                # Use normalization function from utils.normalization
-                flux = simplistic_normalization(flux, err=None)
-            elif self.normalize_method == 'low-resolution':
-                # Use normalization function from utils.normalization
-                flux = low_resolution_normalization(wl, flux, err=None, out_res=100)
-            elif self.normalize_method == 'median_highpass':
-                # Use normalization function from utils.normalization
-                flux = median_highpass_normalization(wl, flux, err=None, window=100)
-            elif self.normalize_method == 'gaussian_lfp':
-                # Use normalization function from utils.normalization
-                flux = gaussian_lfp(wl, flux, err=None, sigma_px=100)
-            elif self.normalize_method == 'savgol_lfp':
-                # Use normalization function from utils.normalization
-                flux = savgol_lfp(wl, flux, err=None, window_length=1301, polyorder=2)
-            else:
-                raise ValueError(f"Unknown normalize_method: {self.normalize_method}. "
-                               f"Must be one of: 'simplistic_normalization', 'low-resolution', 'median_highpass'")
-
+        
         # --- Barycentric + RV shift ---
         # Extract RA and Dec values (type checker safety)
         ra_value = self.coords.ra.value if self.coords.ra is not None else 0.0
@@ -391,6 +387,27 @@ class pRT_spectrum:
 
         # --- Interpolate to data grid ---
         model_flux = np.interp(self.data_wave, waves_even, flux)
+
+        # --- Normalize on data wavelength grid (after all broadening and interpolation) ---
+        if self.normalize:
+            if self.normalize_method == 'simplistic_normalization':
+                model_flux = simplistic_normalization(model_flux, err=None)
+            elif self.normalize_method == 'low-resolution':
+                # low_resolution_normalization returns (flux_norm, continuum) when err is None
+                model_flux, _ = low_resolution_normalization(
+                    self.data_wave, model_flux, err=None, out_res=150
+                )
+            elif self.normalize_method == 'median_highpass':
+                model_flux = median_highpass_normalization(self.data_wave, model_flux, err=None, window=100)
+            elif self.normalize_method == 'gaussian_lfp':
+                model_flux = gaussian_lfp(self.data_wave, model_flux, err=None, sigma_px=100)
+            elif self.normalize_method == 'savgol_lfp':
+                model_flux = savgol_lfp(self.data_wave, model_flux, err=None, window_length=1301, polyorder=2)
+            else:
+                raise ValueError(
+                    f"Unknown normalize_method: {self.normalize_method}. "
+                    "Must be one of: 'simplistic_normalization', 'low-resolution', 'median_highpass'"
+                )
 
         return model_flux
     
@@ -487,68 +504,7 @@ class pRT_spectrum:
             chip_wl.append(wl_chip)
             chip_flux.append(flux_chip)
 
-        # 2) Normalize chips (either per-chip or per-order with concatenated detectors)
-        if self.normalize:
-            if self.normalize_method == 'low-resolution' and self.chips_per_order is not None:
-                # Order-level low-resolution normalization:
-                # concatenate all detectors within each order, compute continuum,
-                # then split back to per-chip spectra (mirrors data preprocessing).
-                cpo = int(self.chips_per_order)
-                for start_idx in range(0, n_chips, cpo):
-                    end_idx = min(start_idx + cpo, n_chips)
-                    # Concatenate wavelengths and fluxes for this order
-                    wl_all = np.concatenate(chip_wl[start_idx:end_idx])
-                    f_all = np.concatenate(chip_flux[start_idx:end_idx])
-
-                    f_all_norm = low_resolution_normalization(
-                        wl_all, f_all, err=None, out_res=100
-                    )
-
-                    # Split normalized flux back to each chip in this order
-                    offset = 0
-                    for idx in range(start_idx, end_idx):
-                        n_pix = len(chip_wl[idx])
-                        chip_flux[idx] = f_all_norm[offset:offset + n_pix]
-                        offset += n_pix
-            else:
-                # Per-chip normalization (original behavior)
-                if self.normalize_method == 'low-resolution' and self.chips_per_order is None:
-                    warnings.warn(
-                        "[pRT_spectrum._make_spectrum_chips] chips_per_order is None; "
-                        "applying low-resolution normalization per chip instead of per order."
-                        "Check whether the data is also normalized per chip."
-                    )
-                for i in range(n_chips):
-                    wl_chip = chip_wl[i]
-                    flux_chip = chip_flux[i]
-
-                    if self.normalize_method == 'simplistic_normalization':
-                        flux_chip = simplistic_normalization(flux_chip, err=None)
-                    elif self.normalize_method == 'low-resolution':
-                        flux_chip = low_resolution_normalization(
-                            wl_chip, flux_chip, err=None, out_res=100
-                        )
-                    elif self.normalize_method == 'median_highpass':
-                        flux_chip = median_highpass_normalization(
-                            wl_chip, flux_chip, err=None, window=100
-                        )
-                    elif self.normalize_method == 'gaussian_lfp':
-                        flux_chip = gaussian_lfp(
-                            wl_chip, flux_chip, err=None, sigma_px=100
-                        )
-                    elif self.normalize_method == 'savgol_lfp':
-                        flux_chip = savgol_lfp(
-                            wl_chip, flux_chip, err=None, window_length=1301, polyorder=2
-                        )
-                    else:
-                        raise ValueError(
-                            f"Unknown normalize_method: {self.normalize_method}. "
-                            "Must be one of: 'simplistic_normalization', 'low-resolution', 'median_highpass'"
-                        )
-
-                    chip_flux[i] = flux_chip
-
-        # 3) Apply RV shift, rotation, instrumental broadening and regrid per chip
+        # 2) Apply RV shift, rotation, instrumental broadening and regrid per chip
         model_flux_chips = []
         for i, data_wave_i in enumerate(self.data_wave):
             wl_chip = chip_wl[i]
@@ -583,7 +539,146 @@ class pRT_spectrum:
             model_flux_chip = np.interp(data_wave_i, waves_even_chip, flux_chip)
             model_flux_chips.append(model_flux_chip)
         
-        # Concatenate all chips into a single array
+        # Concatenate all chips into a single array (still pre-normalization)
         model_flux = np.concatenate(model_flux_chips)
+
+        # 3) Normalize on data wavelength grid (after all broadening and interpolation)
+        if self.normalize:
+            if self.normalize_method == 'low-resolution' and self.chips_per_order is not None:
+                # Order-level low-resolution normalization on data grid
+                cpo = int(self.chips_per_order)
+
+                # For diagnostic plotting across all orders
+                plot_wl_all = []
+                plot_flux_all = []
+                plot_cont_all = []
+
+                for start_idx in range(0, n_chips, cpo):
+                    end_idx = min(start_idx + cpo, n_chips)
+                    wl_all = np.concatenate(self.data_wave[start_idx:end_idx])
+                    f_all = np.concatenate(model_flux_chips[start_idx:end_idx])
+
+                    # low_resolution_normalization returns (flux_norm, continuum) when err is None
+                    f_all_norm, continuum = low_resolution_normalization(
+                        wl_all, f_all, err=None, out_res=150
+                    )
+
+                    # Collect for plotting (all orders together)
+                    if self.debug:
+                        plot_wl_all.append(wl_all)
+                        plot_flux_all.append(f_all)
+                        plot_cont_all.append(continuum)
+
+                    # Split normalized flux back to each chip in this order
+                    offset = 0
+                    for idx in range(start_idx, end_idx):
+                        n_pix = len(self.data_wave[idx])
+                        model_flux_chips[idx] = f_all_norm[offset:offset + n_pix]
+                        offset += n_pix
+
+                # Plot flux and continuum for all orders (only when debugging)
+                if self.debug and len(plot_wl_all) > 0:
+                    wl_plot = np.concatenate(plot_wl_all)
+                    flux_plot = np.concatenate(plot_flux_all)
+                    cont_plot = np.concatenate(plot_cont_all)
+
+                    plt.figure(figsize=(10, 4))
+                    plt.plot(wl_plot, flux_plot, label="flux")
+                    plt.plot(wl_plot, cont_plot, label="continuum")
+                    plt.plot(wl_planck_nm, planck_flux * 20, color="violet", alpha=0.8, linewidth=3, label=f"Planck function: Teff = {teff} K")
+                    plt.xlabel("Wavelength [nm]")
+                    plt.ylabel("Flux")
+                    plt.legend()
+                    plt.tight_layout()
+                    plt.savefig("flux_and_continuum.pdf")
+                    import pdb; pdb.set_trace()
+
+            else:
+                # Per-chip normalization on data grid
+                if self.normalize_method == 'low-resolution' and self.chips_per_order is None:
+                    warnings.warn(
+                        "[pRT_spectrum._make_spectrum_chips] chips_per_order is None; "
+                        "applying low-resolution normalization per chip instead of per order."
+                        "Check whether the data is also normalized per chip."
+                    )
+                for i in range(n_chips):
+                    wl_chip_data = self.data_wave[i]
+                    flux_chip_data = model_flux_chips[i]
+
+                    if self.normalize_method == 'simplistic_normalization':
+                        flux_chip_data = simplistic_normalization(flux_chip_data, err=None)
+                    elif self.normalize_method == 'low-resolution':
+                        # low_resolution_normalization returns (flux_norm, continuum) when err is None
+                        flux_chip_data, _ = low_resolution_normalization(
+                            wl_chip_data, flux_chip_data, err=None, out_res=150
+                        )
+                    elif self.normalize_method == 'median_highpass':
+                        flux_chip_data = median_highpass_normalization(
+                            wl_chip_data, flux_chip_data, err=None, window=100
+                        )
+                    elif self.normalize_method == 'gaussian_lfp':
+                        flux_chip_data = gaussian_lfp(
+                            wl_chip_data, flux_chip_data, err=None, sigma_px=100
+                        )
+                    elif self.normalize_method == 'savgol_lfp':
+                        flux_chip_data = savgol_lfp(
+                            wl_chip_data, flux_chip_data, err=None, window_length=1301, polyorder=2
+                        )
+                    else:
+                        raise ValueError(
+                            f"Unknown normalize_method: {self.normalize_method}. "
+                            "Must be one of: 'simplistic_normalization', 'low-resolution', 'median_highpass'"
+                        )
+
+                    model_flux_chips[i] = flux_chip_data
+
+            # Re-concatenate normalized chips
+            model_flux = np.concatenate(model_flux_chips)
         
         return model_flux
+
+
+
+
+# backup -- Planck function
+import numpy as np
+
+
+def planck_lambda(wavelength_nm, temperature_K):
+    """Planck function B_λ(λ, T) in SI units.
+
+    Parameters
+    ----------
+    wavelength_nm : array_like
+        Wavelength in meters.
+    temperature_K : float or array_like
+        Temperature in Kelvin.
+
+    Returns
+    -------
+    ndarray
+        Spectral radiance B_λ in W m^-3 sr^-1.
+    """
+    h = 6.62607015e-34  # Planck constant [J s]
+    c = 2.99792458e8    # Speed of light [m/s]
+    k_B = 1.380649e-23  # Boltzmann constant [J/K]
+
+    wavelength_m = wavelength_nm * 1e-9
+    
+    lam = np.asarray(wavelength_m, dtype=float)
+    T = np.asarray(temperature_K, dtype=float)
+
+    # Avoid division by zero
+    lam = np.where(lam == 0, np.finfo(float).tiny, lam)
+
+    exponent = (h * c) / (lam * k_B * T)
+    # Use np.expm1 for numerical stability when exponent is small
+    denom = np.expm1(exponent)
+
+    prefactor = 2.0 * h * c**2 / lam**5
+    B_lambda = prefactor / denom
+    return B_lambda
+
+wl_planck_nm = np.linspace(2050, 2500, 1000)
+teff = 3600
+planck_flux = planck_lambda(wl_planck_nm, teff)

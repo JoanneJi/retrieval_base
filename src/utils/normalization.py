@@ -90,7 +90,7 @@ def low_resolution_normalization(wave, flux, err=None, out_res=100):
         err_norm = err / continuum
         return flux_norm, err_norm
     
-    return flux_norm
+    return flux_norm, continuum
 
 
 def median_highpass_normalization(wave, flux, err=None, window=600):

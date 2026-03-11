@@ -233,6 +233,7 @@ class Retrieval:
                 lbl_opacity_sampling=self.lbl_opacity_sampling,
                 normalize=self.normalize,
                 normalize_method=self.normalize_method,
+                # debug=True,
             )
             model_flux = model.make_spectrum()
 
@@ -490,6 +491,20 @@ class Retrieval:
         self.params_dict["phi"] = self.loglike.phi  # flux scaling parameter
         self.params_dict["s2"] = self.loglike.s2  # error inflation parameter
         self.params_dict["chi2_red"] = self.loglike.chi2_0_red  # reduced chi-squared, based on degrees of freedom
+
+        # Use scaled model (f * flux) for plotting and saving so residuals match the likelihood
+        phi = self.loglike.phi
+        if isinstance(phi, (list, np.ndarray)) and len(phi) > 1:
+            # Per-chip phi: apply each chip's scaling factor
+            chip_lengths = [len(w) for w in self.target.wl]
+            chip_starts = np.cumsum([0] + chip_lengths)[:-1]
+            for i, (start, length) in enumerate(zip(chip_starts, chip_lengths)):
+                if i < len(phi):
+                    self.model_flux[start : start + length] *= phi[i]
+        else:
+            # Single global phi (scalar or single-element)
+            f = phi[0] if isinstance(phi, (list, np.ndarray)) else phi
+            self.model_flux = f * self.model_flux
 
         with open(self.output_dir / "params_dict.pkl", "wb") as f:
             pickle.dump(self.params_dict, f)
