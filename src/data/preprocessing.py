@@ -177,7 +177,7 @@ def select_orders_chips(
             e_all = np.concatenate(order_err_chips)
 
             f_all_norm, e_all_norm = low_resolution_normalization(
-                wl_all, f_all, e_all, out_res=150
+                wl_all, f_all, e_all
             )
 
             # Split back into per-detector chips
@@ -210,7 +210,7 @@ def select_orders_chips(
                             )
                     elif normalize_method == 'low-resolution':
                         flux_chip, err_chip = low_resolution_normalization(
-                            wave_chip, flux_chip, err_chip, out_res=150
+                            wave_chip, flux_chip, err_chip
                         )
                     elif normalize_method == 'median_highpass':
                         flux_chip, err_chip = median_highpass_normalization(

@@ -26,7 +26,7 @@ def main():
     setup_prt_path()
     # prefix_crires = "5_012"
     prefix_crires = "whole_chips"
-    prefix_retrieval = "fastchem_eqchem"
+    prefix_retrieval = "fastchem_eqchem_R500"
     normalize_flag = True
     normalize_method = 'low-resolution'  # Options: 'simplistic_normalization', 'low-resolution', 'median_highpass', 'gaussian_lfp', 'savgol_lfp'
 
@@ -74,6 +74,18 @@ def main():
         chips_mode=True,  # Enable chips mode
         chips_per_order=len([0, 1, 2]),  # number of detectors per order, provide this if you want to normalize by order instead of by det/chip
     )
+    # ra_value = target.coords.ra.value if target.coords.ra is not None else 0.0
+    # dec_value = target.coords.dec.value if target.coords.dec is not None else 0.0
+    # from PyAstronomy.pyasl import helcorr
+    # v_bary, _ = helcorr(
+    #     obs_long=-70.40,
+    #     obs_lat=-24.62,
+    #     obs_alt=2635,
+    #     ra2000=ra_value,
+    #     dec2000=dec_value,
+    #     jd=target.JD,
+    # )
+    # print(v_bary)
 
     # 5. load parameters & run retrieval
     parameters = Parameters(config_file=CONFIG_DIR / "CD-35_2722" / "2022-12-31" / f"config_starA_{prefix_retrieval}.py", debug=False)

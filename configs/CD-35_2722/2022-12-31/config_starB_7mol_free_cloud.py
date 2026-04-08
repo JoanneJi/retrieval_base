@@ -87,8 +87,7 @@ free_params = {
     'log_CH4':([-12,-1], r'log CH$_4$', 'uniform'),
     'log_H2S':([-12,-1], r'log H$_2$S', 'uniform'),
     'log_NH3':([-12,-1], r'log NH$_3$', 'uniform'),
-    # 'log_H2S':([-12,-1], r'log H$_2$S', 'uniform'),
-    # 'log_HF':([-12,-1], r'log HF', 'uniform'),
+    'log_HF':([-12,-1], r'log HF', 'uniform'),
 
     # ----- cloud parameters -----
     'log_P_base_gray': ([-5, 2], r'log $P_{\rm base}$', 'uniform'),  # log10 of cloud base pressure [log10(bar)]
@@ -130,7 +129,7 @@ chemistry_kwargs = dict[str, str](
     # species_info_path: Path to custom species_info.csv file.
     #   - If None or not specified: uses default path (SRC_DIR / "atmosphere" / "species_info.csv")
     #   - If specified: uses the provided path (must exist, otherwise falls back to default)
-    # species_info_path = None,  # Example: species_info_path = "/path/to/custom/species_info.csv"
+    species_info_path = '/home/chenyangji/ESO/analysis/retrieval/retrieval_base/src/atmosphere/species_info_Sam.csv',  # Example: species_info_path = "/path/to/custom/species_info.csv"
     
     # LineOpacity: Custom line opacity objects (list of opacity objects).
     #   - If None or not specified: no custom line opacities are used

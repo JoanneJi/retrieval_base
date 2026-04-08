@@ -60,16 +60,15 @@ free_params = {
 
     # ----- radial velocity & surface gravity -----
     'rv': ([0, 40], r'$v_{\rm rad}$', 'uniform'),  # radial velocity [km/s]
-    # 'log_g': ([3, 5.5], r'log $g$', 'uniform'),  # log10 of surface gravity [cm/s^2]
-    'log_g': ([4.3, 0.3], r'log $g$', 'normal'),  # log10 of surface gravity [cm/s^2]
+    'log_g': ([3, 5.5], r'log $g$', 'uniform'),  # log10 of surface gravity [cm/s^2]
 
     # ----- temperature profile -----
     # case 1: 5 temperature knots -> T0, T1, T2, T3, T4
-    'T_0' : ([3000,12000], r'$T_0$', 'uniform'), # bottom of the atmosphere (usually hotter)
-    'T_1' : ([3000,5000], r'$T_1$', 'uniform'),
-    'T_2' : ([1000,5000], r'$T_2$', 'uniform'),
-    'T_3' : ([1000,5000], r'$T_3$', 'uniform'),
-    'T_4' : ([1000,5000], r'$T_4$', 'uniform'), # top of atmosphere (usually cooler)
+    'T_0' : ([1000, 10000], r'$T_0$', 'uniform'), # bottom of the atmosphere (usually hotter)
+    'T_1' : ([1000, 5000], r'$T_1$', 'uniform'),
+    'T_2' : ([300, 4000], r'$T_2$', 'uniform'),
+    'T_3' : ([300, 4000], r'$T_3$', 'uniform'),
+    'T_4' : ([300, 4000], r'$T_4$', 'uniform'), # top of atmosphere (usually cooler)
     # # case 2: 5 temperature gradients -> dlnT_dlnP_{i} (for TP_mode='gradient')
     # # Note: Also need T_phot or T_0 in constant_params as base temperature
     # 'dlnT_dlnP_0' : ([0,0.1], r'$\frac{d\ln T}{d\ln P}_0$', 'uniform'), # bottom of the atmosphere (usually hotter)
@@ -88,8 +87,12 @@ free_params = {
     'log_CH4':([-12,-1], r'log CH$_4$', 'uniform'),
     'log_H2S':([-12,-1], r'log H$_2$S', 'uniform'),
     'log_NH3':([-12,-1], r'log NH$_3$', 'uniform'),
-    # 'log_H2S':([-12,-1], r'log H$_2$S', 'uniform'),
-    # 'log_HF':([-12,-1], r'log HF', 'uniform'),
+    'log_HF':([-12,-1], r'log HF', 'uniform'),
+
+    # ----- cloud parameters -----
+    'log_P_base_gray': ([-5, 2], r'log $P_{\rm base}$', 'uniform'),  # log10 of cloud base pressure [log10(bar)]
+    'log_opa_base_gray': ([-10, 3], r'log $\kappa_{\rm cl,0}$', 'uniform'),  # log10 of opacity at cloud base [log10(cm²/g)]
+    'f_sed_gray': ([0, 20], r'$f_{\rm sed}$', 'uniform'),  # cloud decay power (power-law exponent)
 }
 
 
@@ -126,7 +129,7 @@ chemistry_kwargs = dict[str, str](
     # species_info_path: Path to custom species_info.csv file.
     #   - If None or not specified: uses default path (SRC_DIR / "atmosphere" / "species_info.csv")
     #   - If specified: uses the provided path (must exist, otherwise falls back to default)
-    # species_info_path = None,  # Example: species_info_path = "/path/to/custom/species_info.csv"
+    species_info_path = '/home/chenyangji/ESO/analysis/retrieval/retrieval_base/src/atmosphere/species_info_Sam.csv',  # Example: species_info_path = "/path/to/custom/species_info.csv"
     
     # LineOpacity: Custom line opacity objects (list of opacity objects).
     #   - If None or not specified: no custom line opacities are used
@@ -134,5 +137,10 @@ chemistry_kwargs = dict[str, str](
     # LineOpacity = None,  # Example: LineOpacity = [custom_opacity_object1, custom_opacity_object2]
 )
 
-
-
+cloud_kwargs = dict(
+    cloud_mode = 'gray',
+    # below are all default values
+    # wave_cloud_0 = 1.0,
+    # cloud_slope = 0.0,
+    # omega = 0.0,
+)

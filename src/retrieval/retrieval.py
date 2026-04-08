@@ -459,7 +459,7 @@ class Retrieval:
 
         # Get median values from posterior (these are normalized [0,1] values)
         median_normalized = np.array([
-            np.percentile(self.posterior[:, i], 50.0) 
+            np.percentile(self.posterior[:, i], 50.0)
             for i in range(self.parameters.ndim)
         ])
 
@@ -554,7 +554,29 @@ class Retrieval:
         
         self.get_params_and_spectrum()
         self.callback_label = "final_"
-        
+
+        # Save per-chip phi and chip lengths for CCF / external use (e.g. scaling recomputed model)
+        phi = self.params_dict.get("phi")
+        if phi is not None:
+            phi_arr = np.atleast_1d(phi)
+            np.savetxt(
+                self.output_dir / "phi_per_chip.dat",
+                phi_arr.reshape(-1, 1),
+                header="phi (flux scaling factor per chip, one per line)",
+                fmt="%.8f",
+            )
+            print(f"[retrieval.py/Retrieval.run_retrieval] phi per chip saved to {self.output_dir / 'phi_per_chip.dat'}")
+            # Save chip lengths so notebook/CCF can split spectrum the same way as retrieval
+            if hasattr(self.target, "wl") and isinstance(self.target.wl, (list, tuple)):
+                chip_lengths = [len(w) for w in self.target.wl]
+                np.savetxt(
+                    self.output_dir / "chip_lengths.dat",
+                    np.array(chip_lengths).reshape(-1, 1),
+                    header="pixels per chip (one per line), same order as phi_per_chip.dat",
+                    fmt="%d",
+                )
+                print(f"[retrieval.py/Retrieval.run_retrieval] chip lengths saved to {self.output_dir / 'chip_lengths.dat'}")
+
         print(f"[retrieval.py/Retrieval.run_retrieval] Creating plots...")
         try:
             self.cornerplot()
@@ -585,6 +607,10 @@ class Retrieval:
             # ----- save VMR profile to a dat file (for both live and final) -----
             if self.model is not None:
                 self._save_vmr_profile()
+
+            # ----- save exact mass fractions (pickle) for CCF / external use -----
+            if self.callback_label == "final_" and self.model is not None:
+                self._save_mass_fractions()
 
         except Exception as e:
             print(f"[retrieval.py/Retrieval.run_retrieval] Error in plot_spectrum: {e}")
@@ -1263,6 +1289,52 @@ class Retrieval:
             pickle.dump(vmr_dict, f)
         print(f"[retrieval.py/Retrieval._save_vmr_profile] VMR dictionary saved to {self.output_dir / f'{self.callback_label}vmr.pkl'}")
     
+    def _save_mass_fractions(self):
+        """
+        Save the exact mass fractions used by pRT (as computed by Chemistry) to a pickle file.
+
+        This allows CCF notebooks / external scripts to call calculate_flux() with
+        the exact same mass fractions that were used during the retrieval, bypassing
+        the VMR -> mass_fraction roundtrip (text file precision loss) that causes
+        small but visible spectral differences.
+
+        Output: {output_dir}/final_mass_fractions.pkl
+        Content: dict with keys
+            - 'pressure'       : 1D np.ndarray [bar], shape (n_layers,)
+            - 'mass_fractions' : dict {species_name: 1D np.ndarray, shape (n_layers,)}
+                                 same dict that pRT_spectrum passes to calculate_flux()
+                                 (MMW is NOT included here; it is stored separately)
+            - 'MMW'            : 1D np.ndarray [g/mol], shape (n_layers,)
+            - 'temperature'    : 1D np.ndarray [K], shape (n_layers,)
+            - 'gravity'        : float [cm/s^2]
+        """
+        if self.model is None:
+            print("[retrieval.py/Retrieval._save_mass_fractions] Warning: self.model is None, skipping.")
+            return
+
+        if not hasattr(self.model, 'mass_fractions') or self.model.mass_fractions is None:
+            print("[retrieval.py/Retrieval._save_mass_fractions] Warning: mass_fractions not available on model, skipping.")
+            return
+
+        # mass_fractions dict (includes MMW key when returned from Chemistry)
+        mf_full = self.model.mass_fractions
+        # Separate MMW so the 'mass_fractions' entry is ready for calculate_flux() directly
+        mf_no_mmw = {k: v for k, v in mf_full.items() if k != 'MMW'}
+        mmw = mf_full.get('MMW', None)
+
+        save_dict = {
+            'pressure'       : self.model.pressure.copy(),        # bar
+            'mass_fractions' : {k: v.copy() for k, v in mf_no_mmw.items()},
+            'MMW'            : mmw.copy() if mmw is not None else None,
+            'temperature'    : self.model.temperature.copy(),
+            'gravity'        : float(self.model.gravity),
+        }
+
+        out_path = self.output_dir / "final_mass_fractions.pkl"
+        with open(out_path, "wb") as f:
+            pickle.dump(save_dict, f)
+        print(f"[retrieval.py/Retrieval._save_mass_fractions] Mass fractions saved to {out_path}")
+
     def plot_vmr_profile(self):
         """
         Plot VMR profiles with error bars.

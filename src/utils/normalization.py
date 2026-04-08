@@ -46,7 +46,7 @@ def simplistic_normalization(flux, err=None, axis=-1):
     return flux
 
 
-def low_resolution_normalization(wave, flux, err=None, out_res=100):
+def low_resolution_normalization(wave, flux, err=None, out_res=500):
     """
     Normalize flux by dividing by low-resolution continuum.
     
@@ -57,7 +57,7 @@ def low_resolution_normalization(wave, flux, err=None, out_res=100):
         wave (np.ndarray): wavelength array [nm], shape (n_pixels,)
         flux (np.ndarray): flux array to be normalized, shape (n_pixels,)
         err (np.ndarray or None): error array associated with flux, shape (n_pixels,)
-        out_res (float): target output resolution for continuum estimation (default: 100)
+        out_res (float): target output resolution for continuum estimation (default: 500)
     
     Returns:
         flux_norm (np.ndarray): normalized flux (flux / continuum), shape (n_pixels,)

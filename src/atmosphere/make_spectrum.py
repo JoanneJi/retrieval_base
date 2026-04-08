@@ -35,7 +35,7 @@ class pRT_spectrum:
     - interpolates to data wavelength grid
     """
 
-    def __init__(self, parameters, target, atmosphere, spectral_resolution=100_000, 
+    def __init__(self, parameters, target, atmosphere, spectral_resolution=50_000, 
                  lbl_opacity_sampling=3, normalize=True, normalize_method='simplistic_normalization',
                  contribution=False, debug=False):
         self.parameters = parameters
@@ -114,7 +114,7 @@ class pRT_spectrum:
         # Get species_info_path from chemistry_kwargs (will be None if not specified, which uses default)
         from atmosphere import get_species_from_params
         species_info_path = chemistry_kwargs.get('species_info_path')
-        line_species_from_params = get_species_from_params(param_dict=self.params, species_info_path=species_info_path)  # from 'log_xxx'
+        line_species_from_params, _ = get_species_from_params(param_dict=self.params, species_info_path=species_info_path)  # from 'log_xxx'
         
         chem_mode = chemistry_kwargs.get('chem_mode', 'free')
         
@@ -395,7 +395,7 @@ class pRT_spectrum:
             elif self.normalize_method == 'low-resolution':
                 # low_resolution_normalization returns (flux_norm, continuum) when err is None
                 model_flux, _ = low_resolution_normalization(
-                    self.data_wave, model_flux, err=None, out_res=150
+                    self.data_wave, model_flux, err=None
                 )
             elif self.normalize_method == 'median_highpass':
                 model_flux = median_highpass_normalization(self.data_wave, model_flux, err=None, window=100)
@@ -485,58 +485,28 @@ class pRT_spectrum:
         
         wl_full *= 1e7  # cm → nm
         
-        # --- Process each chip: first extract chip segments, then normalize, then broaden ---
         n_chips = len(self.data_wave)
-        chip_wl = []
-        chip_flux = []
         
-        # 1) Extract chip segments from full spectrum (no normalization yet)
-        for i in range(n_chips):
-            # Get wavelength range for this chip (with padding for extraction)
-            wlmin_chip = wave_ranges_chips[i, 0] - wl_pad
-            wlmax_chip = wave_ranges_chips[i, 1] + wl_pad
-            
-            # Extract the relevant portion from full spectrum (only chip region, skip gaps)
-            mask_chip = (wl_full >= wlmin_chip) & (wl_full <= wlmax_chip)
-            wl_chip = wl_full[mask_chip]
-            flux_chip = flux_full[mask_chip]
-            
-            chip_wl.append(wl_chip)
-            chip_flux.append(flux_chip)
-
-        # 2) Apply RV shift, rotation, instrumental broadening and regrid per chip
+        # 1) Apply RV shift, regrid, rotation, and instrumental broadening on the full band
+        wl_shifted = wl_full * (1 + (self.params["rv"] - v_bary) / getattr(const, 'c').to("km/s").value)
+        waves_even_full = np.linspace(wl_full.min(), wl_full.max(), wl_full.size)
+        flux_full = np.interp(waves_even_full, wl_shifted, flux_full)
+        flux_full = fastRotBroad(waves_even_full, flux_full, 0.5, self.params["vsini"])
+        flux_full = convolve_to_resolution(
+            waves_even_full, flux_full, out_res=self.spectral_resolution
+        )
+        resolution = int(1e6 / self.lbl_opacity_sampling)
+        intermediate_resolution = int(1e6 / max(1, self.lbl_opacity_sampling - 1))
+        flux_full = instr_broadening(
+            waves_even_full, flux_full,
+            out_res=resolution,
+            in_res=intermediate_resolution
+        )
+        
+        # 2) Split by chip: interpolate full-band spectrum onto each chip's data wavelength grid
         model_flux_chips = []
         for i, data_wave_i in enumerate(self.data_wave):
-            wl_chip = chip_wl[i]
-            flux_chip = chip_flux[i]
-
-            # --- Barycentric + RV shift (apply to this chip) ---
-            wl_shifted_chip = wl_chip * (1 + (self.params["rv"] - v_bary) / getattr(const, 'c').to("km/s").value)
-            
-            # --- Regrid, evenly spaced (this chip only) ---
-            waves_even_chip = np.linspace(wl_chip.min(), wl_chip.max(), wl_chip.size)
-            flux_chip = np.interp(waves_even_chip, wl_shifted_chip, flux_chip)
-            
-            # --- Rotation (this chip only) ---
-            flux_chip = fastRotBroad(waves_even_chip, flux_chip, 0.5, self.params["vsini"])
-            
-            # --- Instrumental broadening (double convolution, this chip only) ---
-            # Step 1: Convolve to spectral_resolution
-            flux_chip = convolve_to_resolution(
-                waves_even_chip, flux_chip, out_res=self.spectral_resolution
-            )
-            
-            # Step 2: Additional broadening
-            resolution = int(1e6 / self.lbl_opacity_sampling)
-            intermediate_resolution = int(1e6 / max(1, self.lbl_opacity_sampling - 1))
-            flux_chip = instr_broadening(
-                waves_even_chip, flux_chip,
-                out_res=resolution,
-                in_res=intermediate_resolution
-            )
-            
-            # --- Interpolate to data grid for this chip ---
-            model_flux_chip = np.interp(data_wave_i, waves_even_chip, flux_chip)
+            model_flux_chip = np.interp(data_wave_i, waves_even_full, flux_full)
             model_flux_chips.append(model_flux_chip)
         
         # Concatenate all chips into a single array (still pre-normalization)
@@ -560,7 +530,7 @@ class pRT_spectrum:
 
                     # low_resolution_normalization returns (flux_norm, continuum) when err is None
                     f_all_norm, continuum = low_resolution_normalization(
-                        wl_all, f_all, err=None, out_res=150
+                        wl_all, f_all, err=None
                     )
 
                     # Collect for plotting (all orders together)
@@ -610,7 +580,7 @@ class pRT_spectrum:
                     elif self.normalize_method == 'low-resolution':
                         # low_resolution_normalization returns (flux_norm, continuum) when err is None
                         flux_chip_data, _ = low_resolution_normalization(
-                            wl_chip_data, flux_chip_data, err=None, out_res=150
+                            wl_chip_data, flux_chip_data, err=None
                         )
                     elif self.normalize_method == 'median_highpass':
                         flux_chip_data = median_highpass_normalization(

@@ -1,8 +1,5 @@
 """
-Configuration file for equilibrium chemistry retrieval, with quenching defined by Kzz_chem.
-
-This configuration uses pRT v3 equilibrium chemistry tables.
-Equilibrium chemistry calculates species abundances from elemental ratios (C/O, Fe/H, etc.) and temperature-pressure conditions.
+Example configuration file for the simple retrieval framework.
 
 """
 import numpy as np
@@ -48,27 +45,30 @@ constant_params = {
     # 'd_log_P_phot-1': 1.5,  # log_P_base=0., so knot at 0. + 1.5 = 1.5
 
     
-}
 
+
+    
+}
 
 # ---------- Free parameters ----------
 free_params = {
+    # ...
+
     # ----- full format of the input -----
     # 'T0' : {'bounds': [0, 5000], 'label': r'$T_0$', 'type': 'uniform'},
     # ... but make sure all the parameters are using the same format
 
     # ----- radial velocity & surface gravity -----
     'rv': ([0, 40], r'$v_{\rm rad}$', 'uniform'),  # radial velocity [km/s]
-    # 'log_g': ([3, 5.5], r'log $g$', 'uniform'),  # log10 of surface gravity [cm/s^2]
-    'log_g': ([4.3, 0.3], r'log $g$', 'normal'),  # log10 of surface gravity [cm/s^2]
+    'log_g': ([3, 5.5], r'log $g$', 'uniform'),  # log10 of surface gravity [cm/s^2]
 
     # ----- temperature profile -----
     # case 1: 5 temperature knots -> T0, T1, T2, T3, T4
-    'T_0' : ([3000,12000], r'$T_0$', 'uniform'), # bottom of the atmosphere (usually hotter)
-    'T_1' : ([3000,5000], r'$T_1$', 'uniform'),
-    'T_2' : ([1000,5000], r'$T_2$', 'uniform'),
-    'T_3' : ([1000,5000], r'$T_3$', 'uniform'),
-    'T_4' : ([1000,5000], r'$T_4$', 'uniform'), # top of atmosphere (usually cooler)
+    'T_0' : ([1000, 10000], r'$T_0$', 'uniform'), # bottom of the atmosphere (usually hotter)
+    'T_1' : ([1000, 5000], r'$T_1$', 'uniform'),
+    'T_2' : ([300, 4000], r'$T_2$', 'uniform'),
+    'T_3' : ([300, 4000], r'$T_3$', 'uniform'),
+    'T_4' : ([300, 4000], r'$T_4$', 'uniform'), # top of atmosphere (usually cooler)
     # # case 2: 5 temperature gradients -> dlnT_dlnP_{i} (for TP_mode='gradient')
     # # Note: Also need T_phot or T_0 in constant_params as base temperature
     # 'dlnT_dlnP_0' : ([0,0.1], r'$\frac{d\ln T}{d\ln P}_0$', 'uniform'), # bottom of the atmosphere (usually hotter)
@@ -80,29 +80,14 @@ free_params = {
     # ----- stellar/planetary parameters -----
     'vsini': ([0, 40], r'$v\sin i$', 'uniform'),  # projected rotational velocity [km/s] - used for rotational broadening
     
-    # ----- equilibrium chemistry parameters -----
-    # Required parameters for equilibrium chemistry:
-    'C/O': ([0.1, 1.6], r'C/O', 'uniform'),  # Carbon to oxygen ratio (required)
-    'Fe/H': ([-1.5, 1.5], r'Fe/H', 'uniform'),  # Metallicity in log10 units (required)
-    
-    # Optional parameters for equilibrium chemistry:
-    # 'N/O': ([0.05, 0.5], r'N/O', 'uniform'),  # Nitrogen to oxygen ratio (optional)
-    
-    # Optional isotope ratios (for isotope calculations):
-    '12C/13C': ([30, 250], r'$^{12}$C/$^{13}$C', 'uniform'),  # 12C/13C isotope ratio (optional), or '12/13C_ratio' for backward compatibility
-    # '16O/18O': ([200, 1000], r'$^{16}$O/$^{18}$O', 'uniform'),  # 16O/18O isotope ratio (optional)
-    
-    # Optional: Override specific species with free chemistry (if needed)
-    # If provided, these will override the equilibrium chemistry values for those species
-    # 'log_CH4':([-12,-1], r'log CH$_4$', 'uniform'),  # Override CH4 abundance
-    # 'log_NH3':([-12,-1], r'log NH$_3$', 'uniform'),  # Override NH3 abundance
-    
-    # Quenching parameters:
-    'log_Kzz_chem': ([5, 15], r'log $K_{\rm zz}$', 'uniform'),  # log10 of eddy diffusion coefficient [cm²/s] (optional, for calculating quench pressure)
-    # 'log_P_quench_CO_CH4': ([-6, 2], r'log $P_{\rm quench,CO-CH4}$', 'uniform'),  # log10 of quench pressure for CO-CH4 [bar]
-    # 'log_P_quench_N2_NH3': ([-6, 2], r'log $P_{\rm quench,N2-NH3}$', 'uniform'),  # log10 of quench pressure for N2-NH3 [bar]
-    # 'log_P_quench_HCN': ([-6, 2], r'log $P_{\rm quench,HCN}$', 'uniform'),  # log10 of quench pressure for HCN [bar]
-    # 'log_P_quench_CO2': ([-6, 2], r'log $P_{\rm quench,CO2}$', 'uniform'),  # log10 of quench pressure for CO2 [bar]
+    # ----- chemistry parameters -----
+    'log_H2O':([-12,-1], r'log H$_2$O', 'uniform'), # if equilibrium chemistry, define VMRs
+    'log_12CO':([-12,-1], r'log $^{12}$CO', 'uniform'),
+    'log_13CO':([-12,-1], r'log $^{13}$CO', 'uniform'),
+    'log_CH4':([-12,-1], r'log CH$_4$', 'uniform'),
+    'log_H2S':([-12,-1], r'log H$_2$S', 'uniform'),
+    'log_NH3':([-12,-1], r'log NH$_3$', 'uniform'),
+    'log_HF':([-12,-1], r'log HF', 'uniform'),
 }
 
 
@@ -131,27 +116,21 @@ TP_kwargs = dict[str, tuple[float, float] | int | str](
     # temperature = 1500.,  # Constant temperature profile (overrides above)
 )
 
-chemistry_kwargs = dict(
+chemistry_kwargs = dict[str, str](
     # ----- chemistry mode -----
-    chem_mode = 'equilibrium',  # 'free' or 'equilibrium'
+    chem_mode = 'free',  # 'free' or 'equilibrium'
     
     # ----- optional arguments -----
     # species_info_path: Path to custom species_info.csv file.
     #   - If None or not specified: uses default path (SRC_DIR / "atmosphere" / "species_info.csv")
     #   - If specified: uses the provided path (must exist, otherwise falls back to default)
-    # species_info_path = None,  # Example: species_info_path = "/path/to/custom/species_info.csv"
-    
-    # line_species: List of species names to include in equilibrium chemistry.
-    #   - If None or not specified: automatically extracts all available species from pRT eq-chem table
-    #   - If specified: can be either:
-    #     a) species_info names (e.g., ['H2O', '12CO', 'CH4']) - recommended, matches free chemistry config
-    #     b) pRT names (e.g., ['1H2-16O', '12C-16O', '12C-1H4'])
-    #   - The code will automatically convert species_info names to pRT names if needed
-    #   - To match free chemistry config (config_starB_7mol_free.py), use species_info names:
-    line_species = ['H2O', '12CO', '13CO', 'CH4', 'H2S', 'NH3'],  # Same species as free chemistry config
+    species_info_path = '/home/chenyangji/ESO/analysis/retrieval/retrieval_base/src/atmosphere/species_info_Sam.csv',  # Example: species_info_path = "/path/to/custom/species_info.csv"
     
     # LineOpacity: Custom line opacity objects (list of opacity objects).
     #   - If None or not specified: no custom line opacities are used
     #   - If specified: should be a list of opacity objects with 'line_species' attribute
     # LineOpacity = None,  # Example: LineOpacity = [custom_opacity_object1, custom_opacity_object2]
 )
+
+
+

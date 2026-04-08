@@ -30,12 +30,20 @@ def main():
     # prefix_retrieval = "7mol_eqchem_Pquench"
     # prefix_retrieval = "7mol_eqchem_Kzz"
     normalize_flag = True
-    normalize_method = 'savgol_lfp'  # Options: 'simplistic_normalization', 'low-resolution', 'median_highpass', 'gaussian_lfp', 'savgol_lfp'
+    # normalize_method = 'savgol_lfp'  # Options: 'simplistic_normalization', 'low-resolution', 'median_highpass', 'gaussian_lfp', 'savgol_lfp'
+    normalize_method = 'simplistic_normalization'
+
+    date = "2023-01-03"  # observation night; change this to switch between nights
+    JD_per_night = {
+        "2022-12-31": 2459945.58464374,
+        "2023-01-03": 2459948.77354145,
+    }
+    JD = JD_per_night[date]
 
     # 2. load CRIRES+ spectrum
     wave, flux, err = load_crires_dat(  # micron -> nm
         target='CD-35_2722',
-        night="2022-12-31",
+        night=date,
         savename="starB",
         n_orders=7,
         n_dets=3,
@@ -68,20 +76,20 @@ def main():
     # 4. Create target object in chips_mode
     target = Target(
         wl=wave_chips, fl=flux_chips, err=err_chips,
-        name="CD-35 2722", JD=2459945.58464374,
+        name="CD-35 2722", JD=JD,
         ra="06h09m19.2081174720s", dec="-35d49m31.065774636s",
         chips_mode=True  # Enable chips mode
     )
 
     # 5. load parameters & run retrieval
-    parameters = Parameters(config_file=CONFIG_DIR / "CD-35_2722" / "2022-12-31" / f"config_starB_{prefix_retrieval}.py", debug=False)
+    parameters = Parameters(config_file=CONFIG_DIR / "CD-35_2722" / date / f"config_starB_{prefix_retrieval}.py", debug=False)
 
     retrieval = Retrieval(
         parameters=parameters,
         target=target,
         N_live_points=200,
         evidence_tolerance=0.5,
-        output_subdir=f"CD-35_2722/2022-12-31/starB/{prefix_crires}/{prefix_retrieval}",
+        output_subdir=f"CD-35_2722/{date}/starB/{prefix_crires}/{prefix_retrieval}",
         normalize=normalize_flag,  # Must match data normalization: each chip normalized independently
         normalize_method=normalize_method  # Must match data normalization method
     )

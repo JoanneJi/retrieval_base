@@ -90,7 +90,9 @@ free_params = {
     
     # Optional isotope ratios (for isotope calculations):
     '12C/13C': ([30, 250], r'$^{12}$C/$^{13}$C', 'uniform'),  # 12C/13C isotope ratio (optional), or '12/13C_ratio' for backward compatibility
-    # '16O/18O': ([200, 1000], r'$^{16}$O/$^{18}$O', 'uniform'),  # 16O/18O isotope ratio (optional)
+    '16/17O_ratio': ([200, 1000], r'$^{16}$O/$^{17}$O', 'uniform'),  # 16O/17O isotope ratio (optional)
+    '16/18O_ratio': ([200, 1000], r'$^{16}$O/$^{18}$O', 'uniform'),  # 16O/18O isotope ratio (optional)
+    # 'H/D_ratio': ([200, 1000], r'H/D', 'uniform'),  # H/D isotope ratio (optional)
     
     # Optional: Override specific species with free chemistry (if needed) if in fastchem calculation, otherwise add a new species here
     'log_Sc':([-12,-1], r'log Sc', 'uniform'),  # Add Sc abundance as free chemistry
@@ -148,9 +150,9 @@ chemistry_kwargs = dict(
     #     b) pRT names (e.g., ['1H2-16O', '12C-16O', '12C-1H4'])
     #   - The code will automatically convert species_info names to pRT names if needed
     #   - To match free chemistry config (config_starB_7mol_free.py), use species_info names:
-    line_species = ['Na', 'Ca', 'HF', '12CO', '13CO', 'H2O', 'OH', 'CN', 'TiO', 'Sc', 'Fe', 'Ti'],  # modified version under higher temperature, without He and H2
+    line_species = ['Na', 'Ca', 'HF', '12CO', '13CO', 'H2O', 'OH', 'CN', 'TiO', 'Sc', 'Fe', 'Ti', 'C17O', 'C18O', 'H2(17)O', 'H2(18)O'],  # modified version under higher temperature, without He and H2
     # species I want to save into the VMR file -- name in species_info.csv
-    save_species = ['Na', 'Ca', 'HF', '12CO', '13CO', 'H2O', 'OH', 'CN', 'TiO', 'Sc', 'e-', 'H', 'H1-', 'Fe', 'Ti', 'He', 'H2']  # should include H2 and He
+    save_species = ['Na', 'Ca', 'HF', '12CO', '13CO', 'H2O', 'OH', 'CN', 'TiO', 'Sc', 'e-', 'H', 'H1-', 'Fe', 'Ti', 'He', 'H2', 'C17O', 'C18O', 'H2(17)O', 'H2(18)O']  # should include H2 and He
     # save_species = ['Na', 'Ca', 'HF', '12CO', '13CO', 'H2O', 'OH', 'CN', 'TiO', 'Sc', 'e-', 'H', 'H1-', 'Fe', 'Ti']
     
     # LineOpacity: Custom line opacity objects (list of opacity objects).

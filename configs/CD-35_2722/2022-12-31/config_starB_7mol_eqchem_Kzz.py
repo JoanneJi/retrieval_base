@@ -1,7 +1,7 @@
 """
 Configuration file for equilibrium chemistry retrieval, with quenching defined by Kzz_chem.
 
-This configuration uses pRT v3 equilibrium chemistry tables.
+This configuration uses fastchem_live mode for equilibrium chemistry, with quenching defined by Kzz_chem.
 Equilibrium chemistry calculates species abundances from elemental ratios (C/O, Fe/H, etc.) and temperature-pressure conditions.
 
 """
@@ -65,9 +65,9 @@ free_params = {
     # case 1: 5 temperature knots -> T0, T1, T2, T3, T4
     'T_0' : ([1000, 10000], r'$T_0$', 'uniform'), # bottom of the atmosphere (usually hotter)
     'T_1' : ([1000, 5000], r'$T_1$', 'uniform'),
-    'T_2' : ([0, 4000], r'$T_2$', 'uniform'),
-    'T_3' : ([0, 4000], r'$T_3$', 'uniform'),
-    'T_4' : ([0, 4000], r'$T_4$', 'uniform'), # top of atmosphere (usually cooler)
+    'T_2' : ([300, 4000], r'$T_2$', 'uniform'),
+    'T_3' : ([300, 4000], r'$T_3$', 'uniform'),
+    'T_4' : ([300, 4000], r'$T_4$', 'uniform'), # top of atmosphere (usually cooler)
     # # case 2: 5 temperature gradients -> dlnT_dlnP_{i} (for TP_mode='gradient')
     # # Note: Also need T_phot or T_0 in constant_params as base temperature
     # 'dlnT_dlnP_0' : ([0,0.1], r'$\frac{d\ln T}{d\ln P}_0$', 'uniform'), # bottom of the atmosphere (usually hotter)
@@ -132,25 +132,21 @@ TP_kwargs = dict[str, tuple[float, float] | int | str](
 
 chemistry_kwargs = dict(
     # ----- chemistry mode -----
-    chem_mode = 'equilibrium',  # 'free' or 'equilibrium'
-    
+    chem_mode = 'fastchem_live',  # 'free', 'equilibrium', 'fastchem_grid', 'fastchem_live'
+
+    # ----- FastChem input files -----
+    abundance_file = '/home/chenyangji/ESO/analysis/retrieval/retrieval_base/data/asplund_2020.dat',
+    gas_data_file  = '/home/chenyangji/ESO/analysis/retrieval/retrieval_base/data/_logK.dat',  # full thermochemical data
+    min_temperature = 500.0,  # minimum temperature for FastChem convergence [K]
+
     # ----- optional arguments -----
-    # species_info_path: Path to custom species_info.csv file.
-    #   - If None or not specified: uses default path (SRC_DIR / "atmosphere" / "species_info.csv")
-    #   - If specified: uses the provided path (must exist, otherwise falls back to default)
-    # species_info_path = None,  # Example: species_info_path = "/path/to/custom/species_info.csv"
-    
-    # line_species: List of species names to include in equilibrium chemistry.
-    #   - If None or not specified: automatically extracts all available species from pRT eq-chem table
-    #   - If specified: can be either:
-    #     a) species_info names (e.g., ['H2O', '12CO', 'CH4']) - recommended, matches free chemistry config
-    #     b) pRT names (e.g., ['1H2-16O', '12C-16O', '12C-1H4'])
-    #   - The code will automatically convert species_info names to pRT names if needed
-    #   - To match free chemistry config (config_starB_7mol_free.py), use species_info names:
-    line_species = ['H2O', '12CO', '13CO', 'CH4', 'H2S', 'NH3'],  # Same species as free chemistry config
-    
-    # LineOpacity: Custom line opacity objects (list of opacity objects).
-    #   - If None or not specified: no custom line opacities are used
-    #   - If specified: should be a list of opacity objects with 'line_species' attribute
-    # LineOpacity = None,  # Example: LineOpacity = [custom_opacity_object1, custom_opacity_object2]
+    species_info_path = '/home/chenyangji/ESO/analysis/retrieval/retrieval_base/src/atmosphere/species_info_Sam.csv',
+
+    # line_species: which species to include as line opacity (pRT Radtrans line_species).
+    #   FastChem computes ALL thermodynamically stable species including HF,
+    #   so all 7 molecules here will have abundances from full chemical equilibrium.
+    line_species = ['H2O', '12CO', '13CO', 'CH4', 'H2S', 'NH3', 'HF'],  # same as free-chemistry config, HF is not included in pRT3 chemistry grid!!!
+
+    # save_species: which species VMRs to write to the output VMR file.
+    save_species = ['H2O', '12CO', '13CO', 'CH4', 'H2S', 'NH3', 'HF', 'H2', 'He'],
 )
