@@ -16,3 +16,4 @@ output/*
 !input/.gitkeep
 !output/.gitkeep
 
+data/*.h5
